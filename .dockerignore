@@ -1,0 +1,11 @@
+.git/
+.env
+.env.*
+.venv/
+data/
+cache/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.zed/
