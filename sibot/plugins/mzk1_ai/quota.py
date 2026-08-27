@@ -132,4 +132,7 @@ def _account(
         http_status_code=item.http_status_code if item else None,
         plan=plan,
         weekly=weekly,
+        reset_credits_available=(
+            item.quota.reset_credits_available if item and item.quota else None
+        ),
     )

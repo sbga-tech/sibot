@@ -83,10 +83,21 @@ def _format_alert(event: AlertEvent) -> str:
     if event.kind == "weekly_exhausted":
         return f"{event.display_name}：周额度已用完，{_format_time(event.reset_at)}重置"
     if event.kind == "weekly_reset":
+        if event.source == "scheduled":
+            action = "周额度已正常重置"
+        elif event.source == "reset_credit":
+            action = "已使用重置机会"
+        else:
+            action = "OpenAI已重置周额度"
         return (
-            f"{event.display_name}：周额度已重置，"
+            f"{event.display_name}：{action}，"
             f"当前剩余{_format_percent(event.remaining_percent)}，"
             f"下次{_format_time(event.reset_at)}重置"
+        )
+    if event.kind == "reset_credit_increased":
+        return (
+            f"{event.display_name}：新增{event.added_count}次重置机会，"
+            f"当前可用{event.available_count}次"
         )
     return f"{event.display_name}：登录已失效"
 

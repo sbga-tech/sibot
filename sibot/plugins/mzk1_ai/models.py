@@ -177,3 +177,4 @@ class CodexAccountQuota:
     http_status_code: int | None
     plan: str | None
     weekly: CodexWeeklyQuota | None
+    reset_credits_available: int | None = None

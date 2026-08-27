@@ -27,6 +27,7 @@ class CredentialAlertState(StateModel):
     auth_status: Literal["unknown", "normal", "invalid"] = "unknown"
     last_refreshed_at: datetime | None = None
     weekly: WeeklyAlertState | None = None
+    reset_credits_available: int | None = None
 
 
 class PendingNotification(StateModel):
