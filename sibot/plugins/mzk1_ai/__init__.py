@@ -112,7 +112,7 @@ async def _load_command_message(command: AICommand) -> str:
     if command.action == "quota":
         snapshot = await portal_client.quota()
         accounts = extract_codex_weekly_accounts(snapshot)
-        return format_quota(accounts)
+        return format_quota(accounts, quota_monitor.weekly_window_activity())
     return format_help()
 
 

@@ -21,6 +21,8 @@ class WeeklyAlertState(StateModel):
     reset_at: datetime
     window_seconds: int
     notified_thresholds: set[int] = Field(default_factory=set)
+    last_observed_at: datetime | None = None
+    window_active: bool | None = None
 
 
 class CredentialAlertState(StateModel):

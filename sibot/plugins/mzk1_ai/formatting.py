@@ -1,5 +1,6 @@
 """Compact Chinese messages for narrow QQ mobile layouts."""
 
+from collections.abc import Mapping
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -8,6 +9,7 @@ from .models import CodexAccountQuota, RankingResponse
 
 _DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _HTTP_UNAUTHORIZED = 401
+_FULL_PERCENT = 100.0
 _PERIOD_LABELS = {
     "today": "今日",
     "yesterday": "昨日",
@@ -41,17 +43,30 @@ def format_ranking(ranking: RankingResponse) -> str:
     return "\n".join(lines)
 
 
-def format_quota(accounts: list[CodexAccountQuota]) -> str:
+def format_quota(
+    accounts: list[CodexAccountQuota],
+    window_activity: Mapping[str, bool | None] | None = None,
+) -> str:
     if not accounts:
         return "Codex 周额度\n暂无可用账号"
 
+    activity = window_activity or {}
     lines = ["Codex 周额度"]
     for account in accounts:
-        lines.extend(_format_account_quota(account))
+        lines.extend(
+            _format_account_quota(
+                account,
+                window_active=activity.get(account.credential_id),
+            )
+        )
     return "\n".join(lines)
 
 
-def _format_account_quota(account: CodexAccountQuota) -> tuple[str, ...]:
+def _format_account_quota(
+    account: CodexAccountQuota,
+    *,
+    window_active: bool | None,
+) -> tuple[str, ...]:
     plan = f" [{account.plan}]" if account.plan else ""
     name = f"{account.display_name}{plan}"
     if account.status == "failed":
@@ -61,12 +76,18 @@ def _format_account_quota(account: CodexAccountQuota) -> tuple[str, ...]:
     if account.status in {"missing", "invalid_weekly"} or account.weekly is None:
         return (f"{name}：额度暂时不可用",)
 
-    reset_at = _format_time(account.weekly.reset_at)
     if account.weekly.exhausted:
         status = "已用完"
     else:
         status = f"剩余{_format_percent(account.weekly.remaining_percent)}"
-    return (name, f"{status}，{reset_at}重置")
+    if (
+        account.weekly.exhausted
+        or account.weekly.remaining_percent < _FULL_PERCENT
+        or window_active is True
+    ):
+        reset_at = _format_time(account.weekly.reset_at)
+        return (name, f"{status}，{reset_at}重置")
+    return (name, status)
 
 
 def format_alert_batch(events: list[AlertEvent]) -> str:

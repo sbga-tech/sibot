@@ -8,6 +8,8 @@ from .models import CodexAccountQuota, CodexWeeklyQuota
 from .storage import CredentialAlertState, PersistedState, WeeklyAlertState
 
 _RESET_TOLERANCE = timedelta(minutes=2)
+_WINDOW_ACTIVITY_SAMPLE_INTERVAL = timedelta(minutes=4)
+_FULL_PERCENT = 100.0
 _EXHAUSTED_THRESHOLD = 0
 _HTTP_UNAUTHORIZED = 401
 
@@ -220,7 +222,12 @@ def _evaluate_weekly_quota(
     if weekly is None or observed_at is None:
         return None
     if credential.weekly is None:
-        credential.weekly = _new_weekly_baseline(weekly, thresholds)
+        credential.weekly = _new_weekly_baseline(
+            weekly,
+            observed_at,
+            thresholds,
+            window_active=_initial_window_activity(weekly),
+        )
         return None
 
     previous = credential.weekly
@@ -232,7 +239,12 @@ def _evaluate_weekly_quota(
         current_credits,
     )
     if reset_source is not None:
-        credential.weekly = _new_weekly_baseline(weekly, thresholds)
+        credential.weekly = _new_weekly_baseline(
+            weekly,
+            observed_at,
+            thresholds,
+            window_active=_is_directly_active(weekly),
+        )
         return WeeklyResetAlert(
             kind="weekly_reset",
             credential_id=account.credential_id,
@@ -243,10 +255,13 @@ def _evaluate_weekly_quota(
             observed_at=observed_at,
         )
 
+    window_active = _detect_window_activity(previous, weekly, observed_at)
     event = _threshold_event(previous, account, thresholds)
     previous.remaining_percent = _effective_remaining(weekly)
     previous.reset_at = weekly.reset_at
     previous.window_seconds = weekly.window_seconds
+    previous.last_observed_at = observed_at
+    previous.window_active = window_active
     return event
 
 
@@ -313,7 +328,10 @@ def _threshold_event(
 
 def _new_weekly_baseline(
     weekly: CodexWeeklyQuota,
+    observed_at: datetime,
     thresholds: tuple[int, ...],
+    *,
+    window_active: bool | None,
 ) -> WeeklyAlertState:
     remaining = _effective_remaining(weekly)
     return WeeklyAlertState(
@@ -323,11 +341,45 @@ def _new_weekly_baseline(
         notified_thresholds={
             threshold for threshold in thresholds if remaining <= threshold
         },
+        last_observed_at=observed_at,
+        window_active=window_active,
     )
 
 
 def _effective_remaining(weekly: CodexWeeklyQuota) -> float:
     return 0.0 if weekly.exhausted else weekly.remaining_percent
+
+
+def _initial_window_activity(weekly: CodexWeeklyQuota) -> bool | None:
+    if _is_directly_active(weekly):
+        return True
+    return None
+
+
+def _is_directly_active(weekly: CodexWeeklyQuota) -> bool:
+    return weekly.exhausted or _effective_remaining(weekly) < _FULL_PERCENT
+
+
+def _detect_window_activity(
+    previous: WeeklyAlertState,
+    current: CodexWeeklyQuota,
+    observed_at: datetime,
+) -> bool | None:
+    if _is_directly_active(current):
+        return True
+    if previous.last_observed_at is None:
+        return previous.window_active
+
+    observed_shift = observed_at - previous.last_observed_at
+    if observed_shift <= _WINDOW_ACTIVITY_SAMPLE_INTERVAL:
+        return previous.window_active
+
+    reset_shift = current.reset_at - previous.reset_at
+    if abs(reset_shift) <= _RESET_TOLERANCE:
+        return True
+    if abs(reset_shift - observed_shift) <= _RESET_TOLERANCE:
+        return False
+    return previous.window_active
 
 
 def _same_cycle(
@@ -348,14 +400,19 @@ def _detect_reset_source(
 ) -> ResetSource | None:
     cycle_changed = not _same_cycle(previous, current)
     remaining_increased = _effective_remaining(current) > previous.remaining_percent
-    if not cycle_changed and not remaining_increased:
+    active_cycle_changed = previous.window_active is True and cycle_changed
+    if not remaining_increased and not active_cycle_changed:
         return None
-    if observed_at >= previous.reset_at - _RESET_TOLERANCE:
-        return "scheduled"
+
     if (
         previous_credits is not None
         and current_credits is not None
         and current_credits < previous_credits
     ):
         return "reset_credit"
+    if (
+        previous.window_active is True
+        and observed_at >= previous.reset_at - _RESET_TOLERANCE
+    ):
+        return "scheduled"
     return "openai"

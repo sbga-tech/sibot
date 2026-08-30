@@ -83,6 +83,16 @@ class QuotaMonitor:
     def wake(self) -> None:
         self._wake_event.set()
 
+    def weekly_window_activity(self) -> dict[str, bool | None]:
+        state = self._state
+        if state is None:
+            return {}
+        return {
+            credential_id: credential.weekly.window_active
+            for credential_id, credential in state.credentials.items()
+            if credential.weekly is not None
+        }
+
     async def run_once(self) -> None:
         """Run one poll and delivery pass."""
         if self._state is None:
