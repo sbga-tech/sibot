@@ -11,7 +11,6 @@ from .models import (
     QuotaSnapshot,
 )
 
-EXPECTED_KEEPER_VERSION = "v1.14.8"
 WEEKLY_WINDOW_SECONDS = 7 * 24 * 60 * 60
 _MAX_PERCENT = 100
 _MAIN_RATE_LIMIT_KEYS = {
@@ -20,22 +19,10 @@ _MAIN_RATE_LIMIT_KEYS = {
 }
 
 
-class UnsupportedKeeperVersionError(RuntimeError):
-    """Keeper is not the exact version this internal parser targets."""
-
-    def __init__(self, actual_version: str) -> None:
-        super().__init__(
-            f"expected Keeper {EXPECTED_KEEPER_VERSION}, got {actual_version}"
-        )
-
-
 def extract_codex_weekly_accounts(
     snapshot: QuotaSnapshot,
 ) -> list[CodexAccountQuota]:
     """Extract active Codex accounts and isolate account-level schema errors."""
-    actual_version = snapshot.keeper.version.version
-    if actual_version != EXPECTED_KEEPER_VERSION:
-        raise UnsupportedKeeperVersionError(actual_version)
 
     cache_by_id = {item.auth_index: item for item in snapshot.keeper.quota_cache.items}
     return [

@@ -18,7 +18,7 @@ from .portal import (
     PortalUnavailableError,
     PortalUpstreamError,
 )
-from .quota import UnsupportedKeeperVersionError, extract_codex_weekly_accounts
+from .quota import extract_codex_weekly_accounts
 from .storage import PendingNotification, PersistedState, StateStore
 
 _POLL_INTERVAL_SECONDS = 60
@@ -123,9 +123,6 @@ class QuotaMonitor:
             self._log_invalid_accounts(accounts)
         except PortalUnauthorizedError as error:
             self._log_poll_error("unauthorized", error, error_level=True)
-            return
-        except UnsupportedKeeperVersionError as error:
-            self._log_poll_error("version", error, error_level=True)
             return
         except PortalProtocolError as error:
             self._log_poll_error("protocol", error)

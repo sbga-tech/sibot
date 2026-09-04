@@ -21,7 +21,7 @@ from .config import Config
 from .formatting import format_help, format_quota, format_ranking
 from .monitor import QuotaMonitor
 from .portal import PortalClient, PortalError
-from .quota import UnsupportedKeeperVersionError, extract_codex_weekly_accounts
+from .quota import extract_codex_weekly_accounts
 from .scope import is_target_group
 from .storage import StateStore
 
@@ -98,7 +98,7 @@ async def handle_ai_command(
 async def _execute_command(command: AICommand) -> str:
     try:
         return await _load_command_message(command)
-    except (PortalError, UnsupportedKeeperVersionError) as error:
+    except PortalError as error:
         logger.error("Mzk1 AI command failed: {}", type(error).__name__)
     except Exception:  # noqa: BLE001
         logger.exception("Mzk1 AI command failed unexpectedly")
