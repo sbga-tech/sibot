@@ -18,10 +18,11 @@ from nonebot.rule import Rule
 
 from .commands import AICommand, CommandUsageError, parse_ai_command
 from .config import Config
-from .formatting import format_help, format_quota, format_ranking
+from .formatting import format_help, format_quota, format_ranking, format_reset_credits
 from .monitor import QuotaMonitor
 from .portal import PortalClient, PortalError
 from .quota import extract_codex_weekly_accounts
+from .reset import load_reset_credits
 from .scope import is_target_group
 from .storage import StateStore
 
@@ -30,8 +31,8 @@ import nonebot_plugin_localstore as localstore
 
 __plugin_meta__ = PluginMetadata(
     name="Mzk1 AI",
-    description="CPA Token 排名和 Codex 周额度提醒。",
-    usage="/ai, /ai rank [period], /ai quota",
+    description="CPA Token 排名、Codex 周额度提醒和重置机会查询。",
+    usage="/ai, /ai rank [period], /ai quota, /ai reset",
     type="application",
     config=Config,
     supported_adapters={"~onebot.v11"},
@@ -113,6 +114,8 @@ async def _load_command_message(command: AICommand) -> str:
         snapshot = await portal_client.quota()
         accounts = extract_codex_weekly_accounts(snapshot)
         return format_quota(accounts, quota_monitor.weekly_window_activity())
+    if command.action == "reset":
+        return format_reset_credits(await load_reset_credits(portal_client))
     return format_help()
 
 

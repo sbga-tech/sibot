@@ -2,11 +2,19 @@
 
 from collections.abc import Mapping
 from typing import TypeVar
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
 
-from .models import QuotaSnapshot, RankingPeriod, RankingResponse
+from .models import (
+    QuotaCredential,
+    QuotaCredentialsResponse,
+    QuotaSnapshot,
+    RankingPeriod,
+    RankingResponse,
+    ResetCreditsResponse,
+)
 
 _ResponseModel = TypeVar("_ResponseModel", bound=BaseModel)
 
@@ -95,6 +103,21 @@ class PortalClient:
 
     async def quota(self) -> QuotaSnapshot:
         return await self._get_model("quota", QuotaSnapshot)
+
+    async def quota_credentials(self) -> list[QuotaCredential]:
+        response = await self._get_model("quota", QuotaCredentialsResponse)
+        return response.credentials
+
+    async def reset_credits(self, auth_index: str) -> ResetCreditsResponse:
+        if not auth_index.strip() or auth_index in {".", ".."}:
+            raise PortalBadRequestError
+        response = await self._get_model(
+            f"quota/reset-credits/{quote(auth_index, safe='')}",
+            ResetCreditsResponse,
+        )
+        if response.auth_index != auth_index:
+            raise PortalProtocolError
+        return response
 
     async def _get_model(
         self,

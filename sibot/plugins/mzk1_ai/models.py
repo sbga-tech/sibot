@@ -4,7 +4,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+)
 
 RankingPeriod: TypeAlias = Literal[
     "today",
@@ -154,10 +162,43 @@ class KeeperQuotaPayload(PortalModel):
     quota_cache: QuotaCache
 
 
-class QuotaSnapshot(PortalModel):
-    generated_at: datetime
+class QuotaCredentialsResponse(PortalModel):
+    """Account index parsed independently of the Keeper quota cache."""
+
     credentials: list[QuotaCredential]
+
+
+class QuotaSnapshot(QuotaCredentialsResponse):
+    generated_at: datetime
     keeper: KeeperQuotaPayload
+
+
+class ResetCredit(PortalModel):
+    status: str
+    expires_at: AwareDatetime | None = Field(default=None, alias="expiresAt")
+
+    @field_validator("expires_at", mode="wrap")
+    @classmethod
+    def _parse_expiry(
+        cls, value: object, handler: ValidatorFunctionWrapHandler
+    ) -> datetime | None:
+        # An unusable expiry must not hide the account's available count.
+        try:
+            return handler(value)
+        except ValidationError:
+            return None
+
+
+class ResetCreditsResponse(PortalModel):
+    auth_index: str = Field(alias="authIndex")
+    available_count: int | None = Field(alias="availableCount", ge=0, strict=True)
+    credits: list[ResetCredit]
+
+
+@dataclass(frozen=True, slots=True)
+class CodexAccountResetCredits:
+    display_name: str
+    response: ResetCreditsResponse | None
 
 
 @dataclass(frozen=True, slots=True)

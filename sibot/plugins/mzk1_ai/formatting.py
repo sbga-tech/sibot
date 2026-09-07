@@ -1,11 +1,12 @@
 """Compact Chinese messages for narrow QQ mobile layouts."""
 
+from collections import Counter
 from collections.abc import Mapping
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .alerts import AlertEvent
-from .models import CodexAccountQuota, RankingResponse
+from .models import CodexAccountQuota, CodexAccountResetCredits, RankingResponse
 
 _DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _HTTP_UNAUTHORIZED = 401
@@ -24,6 +25,7 @@ def format_help() -> str:
             "可用指令：",
             "/ai rank [today|yesterday|month|last-month]",
             "/ai quota",
+            "/ai reset",
         )
     )
 
@@ -88,6 +90,43 @@ def _format_account_quota(
         reset_at = _format_time(account.weekly.reset_at)
         return (name, f"{status}，{reset_at}重置")
     return (name, status)
+
+
+def format_reset_credits(accounts: list[CodexAccountResetCredits]) -> str:
+    if not accounts:
+        return "Codex 重置机会\n暂无可用账号"
+    return "Codex 重置机会\n" + "\n\n".join(
+        _format_account_reset_credits(account) for account in accounts
+    )
+
+
+def _format_account_reset_credits(account: CodexAccountResetCredits) -> str:
+    response = account.response
+    if response is None:
+        return f"{account.display_name}：查询失败"
+
+    count = response.available_count
+    status = "可用次数未知" if count is None else f"可用 {count} 次"
+    lines = [f"{account.display_name}：{status}"]
+    if count == 0:
+        return lines[0]
+
+    available = [credit for credit in response.credits if credit.status == "available"]
+    expiries = Counter(
+        credit.expires_at.astimezone(_DISPLAY_TIMEZONE)
+        for credit in available
+        if credit.expires_at is not None
+    )
+    lines.extend(
+        f"{amount} 次于 {_format_time(expiry)} 过期"
+        for expiry, amount in sorted(expiries.items())
+    )
+    known_count = sum(expiries.values())
+    if not expiries:
+        lines.append("过期时间未知")
+    elif known_count < len(available) or (count is not None and known_count < count):
+        lines.append("部分过期时间未知")
+    return "\n".join(lines)
 
 
 def format_alert_batch(events: list[AlertEvent]) -> str:

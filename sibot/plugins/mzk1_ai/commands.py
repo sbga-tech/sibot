@@ -20,7 +20,7 @@ class CommandUsageError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class AICommand:
-    action: Literal["help", "rank", "quota"]
+    action: Literal["help", "rank", "quota", "reset"]
     period: RankingPeriod | None = None
 
 
@@ -33,6 +33,8 @@ def parse_ai_command(argument: str) -> AICommand:
     action = tokens[0].lower()
     if action == "quota" and len(tokens) == 1:
         return AICommand(action="quota")
+    if action == "reset" and len(tokens) == 1:
+        return AICommand(action="reset")
     if action == "rank":
         if len(tokens) == 1:
             return AICommand(action="rank", period="today")
