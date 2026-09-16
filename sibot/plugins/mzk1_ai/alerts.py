@@ -58,6 +58,16 @@ class ResetCreditIncreasedAlert:
 
 
 @dataclass(frozen=True, slots=True)
+class SubscriptionExpiringAlert:
+    kind: Literal["subscription_expiring"]
+    credential_id: str
+    display_name: str
+    active_until: datetime
+    threshold_hours: int
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class LoginInvalidAlert:
     kind: Literal["login_invalid"]
     credential_id: str
@@ -71,6 +81,7 @@ AlertEvent: TypeAlias = (
     | WeeklyResetAlert
     | ResetCreditIncreasedAlert
     | LoginInvalidAlert
+    | SubscriptionExpiringAlert
 )
 
 
@@ -95,6 +106,11 @@ def evaluate_accounts(
 
 def event_key(event: AlertEvent) -> str:
     """Return a stable outbox key for one state transition."""
+    if isinstance(event, SubscriptionExpiringAlert):
+        return (
+            f"subscription-expiring:{event.credential_id}:"
+            f"{event.active_until.isoformat()}:{event.threshold_hours}"
+        )
     if isinstance(event, WeeklyLowAlert):
         threshold = min(event.thresholds)
         return (

@@ -25,11 +25,23 @@ class WeeklyAlertState(StateModel):
     window_active: bool | None = None
 
 
+class SubscriptionAlertState(StateModel):
+    active_until: datetime
+    notified_hours: set[int] = Field(default_factory=set)
+
+
 class CredentialAlertState(StateModel):
     auth_status: Literal["unknown", "normal", "invalid"] = "unknown"
     last_refreshed_at: datetime | None = None
     weekly: WeeklyAlertState | None = None
     reset_credits_available: int | None = None
+    subscription: SubscriptionAlertState | None = None
+
+
+class PendingSubscription(StateModel):
+    credential_id: str
+    active_until: datetime
+    threshold_hours: int
 
 
 class PendingNotification(StateModel):
@@ -39,6 +51,7 @@ class PendingNotification(StateModel):
     created_at: datetime
     attempts: int = 0
     next_attempt_at: datetime
+    subscription: PendingSubscription | None = None
 
 
 class PersistedState(StateModel):

@@ -64,8 +64,7 @@ async def _send_group_message(group_id: int, message: str) -> None:
 quota_monitor = QuotaMonitor(
     portal=portal_client,
     store=state_store,
-    group_id=plugin_config.mzk1_ai_group_id,
-    thresholds=plugin_config.mzk1_ai_codex_weekly_alert_thresholds,
+    config=plugin_config,
     send_notification=_send_group_message,
 )
 

@@ -130,10 +130,15 @@ def _format_account_reset_credits(account: CodexAccountResetCredits) -> str:
 
 
 def format_alert_batch(events: list[AlertEvent]) -> str:
-    return "\n".join(("Codex 周额度提醒", *map(_format_alert, events)))
+    return "\n".join(("Codex 提醒", *map(_format_alert, events)))
 
 
 def _format_alert(event: AlertEvent) -> str:
+    if event.kind == "subscription_expiring":
+        return (
+            f"{event.display_name}：订阅将在{_format_time(event.active_until)}到期，"
+            f"剩余不超过{event.threshold_hours}小时，记得续费。"
+        )
     if event.kind == "weekly_low":
         return (
             f"{event.display_name}：周额度只剩"

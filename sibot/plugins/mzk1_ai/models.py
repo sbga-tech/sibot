@@ -70,6 +70,7 @@ class QuotaCredential(PortalModel):
     provider: str
     credential_type: str = Field(alias="type")
     disabled: bool
+    subscription_active_until: AwareDatetime | None = None
 
 
 class KeeperVersion(PortalModel):

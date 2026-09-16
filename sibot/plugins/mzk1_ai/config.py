@@ -1,5 +1,7 @@
 """Mzk1 AI configuration."""
 
+from typing import Annotated
+
 from pydantic import (
     AnyHttpUrl,
     BaseModel,
@@ -39,6 +41,9 @@ class Config(BaseModel):
     )
     mzk1_ai_portal_admin_api_token: SecretStr
     mzk1_ai_codex_weekly_alert_thresholds: tuple[int, ...] = (50, 25, 10, 5, 0)
+    mzk1_ai_subscription_alert_hours: tuple[Annotated[int, Field(gt=0)], ...] = Field(
+        default=(72, 24), min_length=1
+    )
 
     @field_validator("mzk1_ai_codex_weekly_alert_thresholds")
     @classmethod

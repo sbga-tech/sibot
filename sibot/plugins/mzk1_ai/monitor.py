@@ -8,7 +8,13 @@ from datetime import datetime, timedelta, timezone
 
 from nonebot import logger
 
-from .alerts import AlertEvent, evaluate_accounts, event_key
+from .alerts import (
+    AlertEvent,
+    SubscriptionExpiringAlert,
+    evaluate_accounts,
+    event_key,
+)
+from .config import Config
 from .formatting import format_alert_batch
 from .models import CodexAccountQuota
 from .portal import (
@@ -19,7 +25,13 @@ from .portal import (
     PortalUpstreamError,
 )
 from .quota import extract_codex_weekly_accounts
-from .storage import PendingNotification, PersistedState, StateStore
+from .storage import (
+    PendingNotification,
+    PendingSubscription,
+    PersistedState,
+    StateStore,
+)
+from .subscriptions import evaluate_subscriptions
 
 _POLL_INTERVAL_SECONDS = 60
 _SEND_TIMEOUT_SECONDS = 30
@@ -42,14 +54,14 @@ class QuotaMonitor:
         self,
         portal: PortalClient,
         store: StateStore,
-        group_id: int,
-        thresholds: tuple[int, ...],
+        config: Config,
         send_notification: SendNotification,
     ) -> None:
         self._portal = portal
         self._store = store
-        self._group_id = group_id
-        self._thresholds = thresholds
+        self._group_id = config.mzk1_ai_group_id
+        self._thresholds = config.mzk1_ai_codex_weekly_alert_thresholds
+        self._subscription_alert_hours = config.mzk1_ai_subscription_alert_hours
         self._send_notification = send_notification
         self._state: PersistedState | None = None
         self._task: asyncio.Task[None] | None = None
@@ -135,9 +147,18 @@ class QuotaMonitor:
             logger.info("Mzk1 AI quota polling recovered")
             self._last_poll_error = None
         evaluation = evaluate_accounts(state, accounts, self._thresholds)
+        subscriptions = evaluate_subscriptions(
+            state,
+            snapshot.credentials,
+            self._subscription_alert_hours,
+            datetime.now(timezone.utc),
+        )
         if evaluation.events:
             self._enqueue_events(list(evaluation.events))
-        if evaluation.changed or evaluation.events:
+        for event in subscriptions.events:
+            if isinstance(event, SubscriptionExpiringAlert):
+                self._enqueue_subscription(event)
+        if evaluation.changed or subscriptions.changed:
             await self._store.save(state)
 
     async def _discard_stale_notifications(self) -> None:
@@ -166,6 +187,13 @@ class QuotaMonitor:
             if notification.next_attempt_at <= now
         ]
         for notification in due:
+            if (
+                notification.subscription is not None
+                and notification.subscription.active_until <= datetime.now(timezone.utc)
+            ):
+                state.pending_notifications.remove(notification)
+                await self._store.save(state)
+                continue
             try:
                 await asyncio.wait_for(
                     self._send_notification(
@@ -225,7 +253,27 @@ class QuotaMonitor:
         digest = hashlib.sha256("\n".join(keys).encode()).hexdigest()
         self._enqueue_message(f"alert-batch:{digest}", format_alert_batch(events))
 
-    def _enqueue_message(self, key: str, message: str) -> None:
+    def _enqueue_subscription(self, event: SubscriptionExpiringAlert) -> None:
+        state = self._require_state()
+        state.pending_notifications = [
+            item
+            for item in state.pending_notifications
+            if item.subscription is None
+            or item.subscription.credential_id != event.credential_id
+        ]
+        self._enqueue_message(
+            event_key(event),
+            format_alert_batch([event]),
+            subscription=PendingSubscription(
+                credential_id=event.credential_id,
+                active_until=event.active_until,
+                threshold_hours=event.threshold_hours,
+            ),
+        )
+
+    def _enqueue_message(
+        self, key: str, message: str, *, subscription: PendingSubscription | None = None
+    ) -> None:
         state = self._require_state()
         if any(item.event_key == key for item in state.pending_notifications):
             return
@@ -237,6 +285,7 @@ class QuotaMonitor:
                 message=message,
                 created_at=now,
                 next_attempt_at=now,
+                subscription=subscription,
             )
         )
 
