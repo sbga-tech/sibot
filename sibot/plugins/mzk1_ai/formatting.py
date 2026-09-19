@@ -17,6 +17,8 @@ from .models import (
 _DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _HTTP_UNAUTHORIZED = 401
 _FULL_PERCENT = 100.0
+_HOURS_PER_DAY = 24
+_SHORT_RUNWAY_HOURS = 48
 _PERIOD_LABELS = {
     "today": "今日",
     "yesterday": "昨日",
@@ -24,18 +26,13 @@ _PERIOD_LABELS = {
     "previous_month": "上月",
 }
 _FORECAST_PROBLEMS = {
-    "no_accounts": "暂无启用的 Codex 账号。",
-    "missing_quota": "部分额度查询失败，暂不能估算全池续航。",
-    "stale_quota": "额度数据已过期或正在重置，等待刷新后再查。",
-    "mixed_plans": "订阅档位不一致或未知，暂不能合并估算额度。",
-    "missing_routing": "调度状态不完整，暂不能估算可用额度。",
-    "unstarted_window": "当前可调度账号暂无确定的自然回补时间，暂不预测续航。",
-    "missing_history": "历史不足、过期或与当前周期不一致，暂不预测续航。",
-}
-_FORECAST_WARNINGS = {
-    "routing_limited": "部分余额当前未参与调度，未计入续航；恢复后请重新查询。",
-    "short_history": "历史未覆盖全部观察窗口，仅展示有足够数据的情景。",
-    "subscription_expiring": "有订阅将在回补前到期，估算以按期续费为前提。",
+    "no_accounts": "暂无 Codex 账号",
+    "missing_quota": "额度数据不完整",
+    "stale_quota": "额度数据已过期",
+    "mixed_plans": "账号订阅不一致",
+    "missing_routing": "调度状态不完整",
+    "unstarted_window": "暂无重置时间",
+    "missing_history": "历史数据不足",
 }
 
 
@@ -68,12 +65,16 @@ def format_ranking(ranking: RankingResponse) -> str:
 def format_quota(
     accounts: list[CodexAccountQuota],
     window_activity: Mapping[str, bool | None] | None = None,
+    forecast: PoolForecast | None = None,
 ) -> str:
     if not accounts:
-        return "Codex 周额度\n暂无可用账号"
+        return "Codex 额度\n暂无可用账号"
 
     activity = window_activity or {}
-    lines = ["Codex 周额度"]
+    lines = ["Codex 额度"]
+    if forecast is not None:
+        lines.extend(_format_forecast_summary(forecast))
+    lines.append("")
     for account in accounts:
         lines.extend(
             _format_account_quota(
@@ -92,23 +93,26 @@ def _format_account_quota(
     plan = f" [{account.plan}]" if account.plan else ""
     name = f"{account.display_name}{plan}"
     if account.status == "failed":
-        if account.http_status_code == _HTTP_UNAUTHORIZED:
-            return (f"{name}：登录无效或已过期",)
-        return (f"{name}：额度暂时不可用",)
+        message = (
+            "登录失效"
+            if account.http_status_code == _HTTP_UNAUTHORIZED
+            else "额度暂不可用"
+        )
+        return (name, message)
     if account.status in {"missing", "invalid_weekly"} or account.weekly is None:
-        return (f"{name}：额度暂时不可用",)
+        return (name, "额度暂不可用")
 
-    if account.weekly.exhausted:
+    weekly = account.weekly
+    if weekly.exhausted:
         status = "已用完"
     else:
-        status = f"剩余{_format_percent(account.weekly.remaining_percent)}"
+        status = f"剩余{_format_percent(weekly.remaining_percent)}"
     if (
-        account.weekly.exhausted
-        or account.weekly.remaining_percent < _FULL_PERCENT
+        weekly.exhausted
+        or weekly.remaining_percent < _FULL_PERCENT
         or window_active is True
     ):
-        reset_at = _format_time(account.weekly.reset_at)
-        return (name, f"{status}，{reset_at}重置")
+        status += f"，{_format_time(weekly.reset_at)}重置"
     return (name, status)
 
 
@@ -187,64 +191,71 @@ def _format_alert(event: AlertEvent) -> str:
     return f"{event.display_name}：登录已失效"
 
 
-def format_forecast(forecast: PoolForecast) -> str:
-    lines = ["Codex 全池续航"]
-    if forecast.remaining_percent is not None:
-        lines.append(f"观测周额度剩余：{forecast.remaining_percent:.1f}%")
-    if (
-        forecast.available_percent is not None
-        and forecast.available_percent != forecast.remaining_percent
-    ):
-        lines.append(f"其中可调度余额：{forecast.available_percent:.1f}%（按全池容量）")
-    if forecast.available_percent == 0:
-        lines.append("观测余额中没有可调度的周额度。")
-    if forecast.next_reset_at is not None:
-        lines.append(f"最近自然回补：{_format_time(forecast.next_reset_at)}")
+def _format_forecast_summary(forecast: PoolForecast) -> list[str]:
+    lines = _format_forecast_balance(forecast)
     if forecast.problem is not None:
         lines.append(_FORECAST_PROBLEMS[forecast.problem])
-    for scenario in forecast.scenarios:
-        lines.extend(_format_forecast_scenario(forecast, scenario))
-    lines.extend(_FORECAST_WARNINGS[warning] for warning in forecast.warnings)
-    if forecast.observed_at is not None:
-        lines.append(f"数据截至：{_format_time(forecast.observed_at)}")
-    if forecast.scenarios:
-        lines.append("已按各账号数据时间估算当前余额；不含短时限制及重置机会。")
-    return "\n".join(lines)
-
-
-def _format_forecast_scenario(
-    forecast: PoolForecast, scenario: ForecastScenario
-) -> list[str]:
-    lines = [
-        "",
-        f"近{scenario.lookback_hours}小时："
-        f"平均每小时消耗全池 {scenario.burn_percent_per_hour:.2f} 个百分点",
-    ]
-    if forecast.available_percent == 0:
-        return lines
-    if scenario.runway_hours is None:
-        lines.append("未观察到可计量的额度扣减，暂不预测耗尽时间。")
-    elif scenario.runway_hours <= 0:
-        lines.append("按此节奏估算，当前可调度额度可能已经耗尽。")
-    elif scenario.reaches_reset:
-        lines.append("保持此节奏，预计可以撑到本次自然回补。")
     else:
-        exhaustion = forecast.generated_at + timedelta(hours=scenario.runway_hours)
-        local = exhaustion.astimezone(_DISPLAY_TIMEZONE)
-        duration = (
-            "不足1小时"
-            if scenario.runway_hours < 1
-            else f"约{scenario.runway_hours:.0f}小时"
-        )
-        lines.append(
-            f"预计还能用{duration}，"
-            f"约{local.month}月{local.day}日{local.hour}时耗尽，早于自然回补。"
-        )
-        if scenario.target_fraction is not None:
-            lines.append(
-                f"要撑到回补，全池总消耗需降至此节奏的约{scenario.target_fraction:.0%}。"
-            )
+        lines.extend(_format_forecast_scenarios(forecast))
+    if "routing_limited" in forecast.warnings:
+        lines.append("部分账号暂不可用")
+    if "subscription_expiring" in forecast.warnings:
+        lines.append("有订阅将在重置前到期")
     return lines
+
+
+def _format_forecast_balance(forecast: PoolForecast) -> list[str]:
+    lines: list[str] = []
+    if forecast.remaining_percent is not None:
+        remaining = f"{forecast.remaining_percent:.1f}%"
+        if (
+            forecast.available_percent is not None
+            and forecast.available_percent != forecast.remaining_percent
+        ):
+            remaining += f"，可用{forecast.available_percent:.1f}%"
+        lines.append(f"全池剩余{remaining}")
+    if forecast.next_reset_at is not None:
+        lines.append(f"最早重置：{_format_time(forecast.next_reset_at)}")
+    return lines
+
+
+def _format_forecast_scenarios(forecast: PoolForecast) -> list[str]:
+    if not forecast.scenarios:
+        return []
+    lines = [_format_primary_scenario(forecast.scenarios[0], forecast)]
+    if len(forecast.scenarios) > 1:
+        lines.append(
+            f"近6小时消耗：{forecast.scenarios[1].burn_percent_per_hour:.2f}%/小时"
+        )
+    return lines
+
+
+def _format_primary_scenario(scenario: ForecastScenario, forecast: PoolForecast) -> str:
+    rate = f"{scenario.burn_percent_per_hour:.2f}%/小时"
+    prefix = f"近{scenario.lookback_hours}小时消耗：{rate}"
+    if scenario.runway_hours is None:
+        return f"{prefix}，暂无耗尽估计"
+    if scenario.runway_hours <= 0:
+        return f"{prefix}，当前可用额度已见底"
+    if scenario.reaches_reset:
+        return f"{prefix}，预计能撑到最早重置"
+    exhaustion = forecast.generated_at + timedelta(hours=scenario.runway_hours)
+    exhaustion_time = _format_time(exhaustion)
+    result = (
+        f"{prefix}，约剩{_format_duration(scenario.runway_hours)}"
+        f"（预计{exhaustion_time}耗尽）"
+    )
+    if scenario.target_fraction is not None:
+        result += f"；要撑到最早重置，需降至当前消耗的约{scenario.target_fraction:.0%}"
+    return result
+
+
+def _format_duration(hours: float) -> str:
+    if hours < 1:
+        return "不到1小时"
+    if hours < _SHORT_RUNWAY_HOURS:
+        return f"{hours:.0f}小时"
+    return f"{hours / _HOURS_PER_DAY:.1f}天"
 
 
 def _format_percent(value: float) -> str:

@@ -20,7 +20,6 @@ from .commands import AICommand, CommandUsageError, parse_ai_command
 from .config import Config
 from .forecast import load_pool_forecast
 from .formatting import (
-    format_forecast,
     format_help,
     format_quota,
     format_ranking,
@@ -121,9 +120,7 @@ async def _load_command_message(command: AICommand) -> str:
         accounts = extract_codex_weekly_accounts(snapshot)
         activity = quota_monitor.weekly_window_activity()
         forecast = await load_pool_forecast(portal_client, accounts, activity)
-        return "\n\n".join(
-            (format_forecast(forecast), format_quota(accounts, activity))
-        )
+        return format_quota(accounts, activity, forecast)
     if command.action == "reset":
         return format_reset_credits(await load_reset_credits(portal_client))
     return format_help()
