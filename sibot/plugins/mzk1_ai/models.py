@@ -208,6 +208,7 @@ class CodexWeeklyQuota:
     exhausted: bool
     reset_at: datetime
     window_seconds: int
+    window_role: Literal["primary", "secondary"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,3 +221,81 @@ class CodexAccountQuota:
     plan: str | None
     weekly: CodexWeeklyQuota | None
     reset_credits_available: int | None = None
+    subscription_active_until: datetime | None = None
+
+
+class QuotaRoutingCredential(PortalModel):
+    credential_id: str
+    provider: str
+    disabled: bool
+    status: str
+    unavailable: bool
+    next_retry_after: AwareDatetime | None = None
+    weight: int | None = None
+
+
+class QuotaRoutingSnapshot(PortalModel):
+    generated_at: AwareDatetime
+    credentials: list[QuotaRoutingCredential]
+
+
+class QuotaHistoryWindow(PortalModel):
+    window_role: Literal["primary", "secondary"]
+    window_seconds: int
+
+
+class QuotaHistoryTransition(PortalModel):
+    from_remaining_percent: int = Field(ge=0, le=100)
+    to_remaining_percent: int = Field(ge=0, le=100)
+    interval_started_at: AwareDatetime
+    interval_ended_at: AwareDatetime
+
+
+class QuotaHistoryCycle(PortalModel):
+    status: Literal["current", "completed"]
+    window_seconds: int
+    reset_at: AwareDatetime
+    first_observed_at: AwareDatetime
+    last_observed_at: AwareDatetime
+    transitions: list[QuotaHistoryTransition]
+
+
+class QuotaHistoryResponse(PortalModel):
+    generated_at: AwareDatetime
+    selected_window: QuotaHistoryWindow | None
+    cycles: list[QuotaHistoryCycle]
+
+
+@dataclass(frozen=True, slots=True)
+class ForecastScenario:
+    lookback_hours: int
+    burn_percent_per_hour: float
+    runway_hours: float | None
+    reaches_reset: bool | None
+    target_fraction: float | None
+
+
+ForecastProblem: TypeAlias = Literal[
+    "no_accounts",
+    "missing_quota",
+    "stale_quota",
+    "mixed_plans",
+    "missing_routing",
+    "unstarted_window",
+    "missing_history",
+]
+ForecastWarning: TypeAlias = Literal[
+    "routing_limited", "short_history", "subscription_expiring"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class PoolForecast:
+    generated_at: datetime
+    problem: ForecastProblem | None = None
+    remaining_percent: float | None = None
+    available_percent: float | None = None
+    next_reset_at: datetime | None = None
+    observed_at: datetime | None = None
+    scenarios: tuple[ForecastScenario, ...] = ()
+    warnings: tuple[ForecastWarning, ...] = ()

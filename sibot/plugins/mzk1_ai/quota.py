@@ -86,6 +86,9 @@ def _extract_account(
             exhausted=exhausted,
             reset_at=row.reset_at,
             window_seconds=WEEKLY_WINDOW_SECONDS,
+            window_role=(
+                "primary" if row.key == "rate_limit.primary_window" else "secondary"
+            ),
         ),
     )
 
@@ -122,4 +125,5 @@ def _account(
         reset_credits_available=(
             item.quota.reset_credits_available if item and item.quota else None
         ),
+        subscription_active_until=credential.subscription_active_until,
     )

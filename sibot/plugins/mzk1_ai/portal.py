@@ -10,6 +10,8 @@ from pydantic import BaseModel, SecretStr, ValidationError
 from .models import (
     QuotaCredential,
     QuotaCredentialsResponse,
+    QuotaHistoryResponse,
+    QuotaRoutingSnapshot,
     QuotaSnapshot,
     RankingPeriod,
     RankingResponse,
@@ -107,6 +109,20 @@ class PortalClient:
     async def quota_credentials(self) -> list[QuotaCredential]:
         response = await self._get_model("quota", QuotaCredentialsResponse)
         return response.credentials
+
+    async def quota_routing(self) -> QuotaRoutingSnapshot:
+        return await self._get_model("quota/routing", QuotaRoutingSnapshot)
+
+    async def quota_history(
+        self, auth_index: str, window_role: str
+    ) -> QuotaHistoryResponse:
+        if not auth_index.strip() or auth_index in {".", ".."}:
+            raise PortalBadRequestError
+        return await self._get_model(
+            f"quota/history/{quote(auth_index, safe='')}",
+            QuotaHistoryResponse,
+            params={"window_role": window_role},
+        )
 
     async def reset_credits(self, auth_index: str) -> ResetCreditsResponse:
         if not auth_index.strip() or auth_index in {".", ".."}:
