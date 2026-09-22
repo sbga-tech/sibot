@@ -19,8 +19,8 @@
 ## Rules
 
 - Keep all external calls asynchronous and bounded by the existing client timeouts/concurrency limits. Handle Portal protocol, authentication, upstream, and availability errors without leaking response bodies or secrets.
-- Treat upstream quota JSON as a compatibility boundary: validate the fields needed by the current feature, tolerate additive fields, and fail closed when the data is stale, incomplete, mixed-plan, or from mismatched reset cycles.
-- Shared-pool forecasts use observed quota-percentage changes, not token counts as a substitute for subscription quota. Separate natural reset cycles before calculating burn rates; never turn a reset replenishment into negative consumption.
+- Treat upstream quota JSON as a compatibility boundary: validate the fields needed by the current feature, tolerate additive fields, and stop forecasts when data is stale, incomplete, or from mismatched reset cycles. Mixed subscription plans are valid; normalize their quota using known nominal capacity ratios rather than rejecting the pool merely because plan names differ.
+- Shared-pool forecasts use observed quota-percentage changes, not token counts as a substitute for subscription quota. Apply the same subscription-capacity weights to balances, burn rates, and elapsed-time adjustments; CPA routing weights are not capacity weights. Separate reset cycles before calculating burn rates; never turn a reset replenishment into negative consumption.
 - Account-level CPA `unavailable` state may exclude balance from current runway, but it must not be interpreted as reduced historical demand. The bot must not clear cooldowns, reset accounts, alter routing, or apply throttling automatically.
 - Keep configuration names compatible with the `MZK1_AI_` environment convention. Adding a setting requires updating `Config` and its validation together; do not hard-code deployment-specific secrets or group IDs.
 - Do not write tests. Do not add test files or test-only abstractions.

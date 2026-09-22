@@ -29,7 +29,7 @@ _FORECAST_PROBLEMS = {
     "no_accounts": "暂无 Codex 账号",
     "missing_quota": "额度数据不完整",
     "stale_quota": "额度数据已过期",
-    "mixed_plans": "账号订阅不一致",
+    "unsupported_plans": "订阅额度无法换算",
     "missing_routing": "调度状态不完整",
     "unstarted_window": "暂无重置时间",
     "missing_history": "历史数据不足",

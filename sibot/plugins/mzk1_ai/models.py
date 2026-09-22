@@ -279,7 +279,7 @@ ForecastProblem: TypeAlias = Literal[
     "no_accounts",
     "missing_quota",
     "stale_quota",
-    "mixed_plans",
+    "unsupported_plans",
     "missing_routing",
     "unstarted_window",
     "missing_history",
