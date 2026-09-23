@@ -27,8 +27,8 @@ _MAX_SAMPLE_AGE = timedelta(minutes=30)
 _CYCLE_TIME_TOLERANCE = timedelta(minutes=2)
 _ROUTING_TIME_PRECISION = timedelta(seconds=1)
 _FULL_PERCENT = 100.0
-# Nominal subscription capacities, not CPA routing weights.
-_PLAN_CAPACITIES = {"pro-5x": 1, "pro-20x": 4}
+# One account's full Plus weekly quota is 100 pool points.
+_PLAN_CAPACITIES = {"plus": 1, "pro-5x": 5, "pro-20x": 20}
 
 
 async def load_pool_forecast(
@@ -145,15 +145,14 @@ def _quota_problem(
             or weekly.reset_at <= now
         ):
             return "stale_quota"
-    plans = {account.plan for account in accounts}
-    if not all(plans) or (len(plans) > 1 and not plans.issubset(_PLAN_CAPACITIES)):
+    if any(account.plan not in _PLAN_CAPACITIES for account in accounts):
         return "unsupported_plans"
     return None
 
 
 def _capacity(account: CodexAccountQuota) -> int:
-    # Other named plans are accepted only in homogeneous pools by _quota_problem.
-    return _PLAN_CAPACITIES.get(account.plan or "", 1)
+    # Only known plans pass _quota_problem; no arbitrary default multiplier.
+    return _PLAN_CAPACITIES[account.plan or ""]
 
 
 def _pool_snapshot(
@@ -174,13 +173,11 @@ def _pool_snapshot(
 
     remaining = 0.0
     available = 0.0
-    total_capacity = 0
     reset_times: list[datetime] = []
     for account in accounts:
         weekly = account.weekly
         assert weekly is not None  # Validated by _quota_problem.
         capacity = _capacity(account)
-        total_capacity += capacity
         remaining += weekly.remaining_percent * capacity
         routable = _routable(statuses[account.credential_id], now)
         if routable:
@@ -207,8 +204,8 @@ def _pool_snapshot(
     return PoolForecast(
         generated_at=now,
         problem="unstarted_window" if next_reset is None else None,
-        remaining_percent=remaining / total_capacity,
-        available_percent=available / total_capacity,
+        remaining_plus_points=remaining,
+        available_plus_points=available,
         next_reset_at=next_reset,
         observed_at=min(
             account.refreshed_at
@@ -278,21 +275,19 @@ def _scenario(
     burns = [_covered_burn(history, start, end) for history in histories]
     if any(burn is None for burn in burns):
         return None
-    # Balance and observed consumption use the same nominal capacity units.
-    # Blocked accounts still contribute observed demand, regardless of routing weights.
-    total_capacity = sum(_capacity(account) for account in accounts)
+    # Fixed Plus-based points: do not divide by today's pool size. An account
+    # now in cooldown still contributes its observed consumption.
     rate = (
         sum(
             burn * _capacity(account)
             for account, burn in zip(accounts, burns, strict=True)
             if burn is not None
         )
-        / total_capacity
         / hours
     )
     if rate <= 0:
         return ForecastScenario(hours, rate, None, None, None)
-    assert forecast.available_percent is not None
+    assert forecast.available_plus_points is not None
     assert forecast.next_reset_at is not None
     refill_hours = (forecast.next_reset_at - end).total_seconds() / 3600
     statuses = {item.credential_id: item for item in routing.credentials}
@@ -306,10 +301,10 @@ def _scenario(
         projected_balance += max(
             0.0, account.weekly.remaining_percent - burn / hours * age_hours
         ) * _capacity(account)
-    runway_hours = projected_balance / total_capacity / rate
+    runway_hours = projected_balance / rate
     return ForecastScenario(
         lookback_hours=hours,
-        burn_percent_per_hour=rate,
+        burn_plus_points_per_hour=rate,
         runway_hours=runway_hours,
         reaches_reset=runway_hours >= refill_hours,
         target_fraction=min(1.0, runway_hours / refill_hours),

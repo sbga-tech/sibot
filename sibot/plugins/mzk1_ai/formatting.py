@@ -206,14 +206,14 @@ def _format_forecast_summary(forecast: PoolForecast) -> list[str]:
 
 def _format_forecast_balance(forecast: PoolForecast) -> list[str]:
     lines: list[str] = []
-    if forecast.remaining_percent is not None:
-        remaining = f"{forecast.remaining_percent:.1f}%"
+    if forecast.remaining_plus_points is not None:
+        remaining = f"{forecast.remaining_plus_points:.1f}%"
         if (
-            forecast.available_percent is not None
-            and forecast.available_percent != forecast.remaining_percent
+            forecast.available_plus_points is not None
+            and forecast.available_plus_points != forecast.remaining_plus_points
         ):
-            remaining += f"，可用{forecast.available_percent:.1f}%"
-        lines.append(f"全池剩余{remaining}")
+            remaining += f"，可用{forecast.available_plus_points:.1f}%"
+        lines.append(f"现启用账号剩余{remaining}（Plus=100%）")
     if forecast.next_reset_at is not None:
         lines.append(f"最早重置：{_format_time(forecast.next_reset_at)}")
     return lines
@@ -225,13 +225,13 @@ def _format_forecast_scenarios(forecast: PoolForecast) -> list[str]:
     lines = [_format_primary_scenario(forecast.scenarios[0], forecast)]
     if len(forecast.scenarios) > 1:
         lines.append(
-            f"近6小时消耗：{forecast.scenarios[1].burn_percent_per_hour:.2f}%/小时"
+            f"近6小时消耗：{forecast.scenarios[1].burn_plus_points_per_hour:.2f}%/小时"
         )
     return lines
 
 
 def _format_primary_scenario(scenario: ForecastScenario, forecast: PoolForecast) -> str:
-    rate = f"{scenario.burn_percent_per_hour:.2f}%/小时"
+    rate = f"{scenario.burn_plus_points_per_hour:.2f}%/小时"
     prefix = f"近{scenario.lookback_hours}小时消耗：{rate}"
     if scenario.runway_hours is None:
         return f"{prefix}，暂无耗尽估计"

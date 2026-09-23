@@ -269,7 +269,7 @@ class QuotaHistoryResponse(PortalModel):
 @dataclass(frozen=True, slots=True)
 class ForecastScenario:
     lookback_hours: int
-    burn_percent_per_hour: float
+    burn_plus_points_per_hour: float
     runway_hours: float | None
     reaches_reset: bool | None
     target_fraction: float | None
@@ -293,8 +293,8 @@ ForecastWarning: TypeAlias = Literal[
 class PoolForecast:
     generated_at: datetime
     problem: ForecastProblem | None = None
-    remaining_percent: float | None = None
-    available_percent: float | None = None
+    remaining_plus_points: float | None = None
+    available_plus_points: float | None = None
     next_reset_at: datetime | None = None
     observed_at: datetime | None = None
     scenarios: tuple[ForecastScenario, ...] = ()
