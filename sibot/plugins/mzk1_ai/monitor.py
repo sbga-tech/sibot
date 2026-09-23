@@ -40,6 +40,7 @@ _BASE_RETRY_SECONDS = 60
 _MAX_RETRY_SECONDS = 60 * 60
 
 SendNotification = Callable[[int, str], Awaitable[None]]
+CheckNotification = Callable[[int, str, datetime], Awaitable[bool]]
 
 
 class MonitorNotInitializedError(RuntimeError):
@@ -56,6 +57,7 @@ class QuotaMonitor:
         store: StateStore,
         config: Config,
         send_notification: SendNotification,
+        check_notification: CheckNotification,
     ) -> None:
         self._portal = portal
         self._store = store
@@ -63,6 +65,7 @@ class QuotaMonitor:
         self._thresholds = config.mzk1_ai_codex_weekly_alert_thresholds
         self._subscription_alert_hours = config.mzk1_ai_subscription_alert_hours
         self._send_notification = send_notification
+        self._check_notification = check_notification
         self._state: PersistedState | None = None
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
@@ -195,13 +198,7 @@ class QuotaMonitor:
                 await self._store.save(state)
                 continue
             try:
-                await asyncio.wait_for(
-                    self._send_notification(
-                        notification.group_id,
-                        notification.message,
-                    ),
-                    timeout=_SEND_TIMEOUT_SECONDS,
-                )
+                await self._deliver_notification(notification)
             except Exception as error:  # noqa: BLE001
                 notification.attempts += 1
                 exponent = max(notification.attempts - 1, 0)
@@ -218,6 +215,29 @@ class QuotaMonitor:
             else:
                 state.pending_notifications.remove(notification)
             await self._store.save(state)
+
+    async def _deliver_notification(self, notification: PendingNotification) -> None:
+        attempted_at = notification.last_attempt_at
+        if attempted_at is None and notification.attempts:
+            attempted_at = notification.created_at
+        if attempted_at is not None:
+            delivered = await asyncio.wait_for(
+                self._check_notification(
+                    notification.group_id, notification.message, attempted_at
+                ),
+                timeout=_SEND_TIMEOUT_SECONDS,
+            )
+            if delivered:
+                return
+
+        # Persist before sending so a lost acknowledgement or restart leads to
+        # a history check, not an unconditional duplicate send.
+        notification.last_attempt_at = datetime.now(timezone.utc)
+        await self._store.save(self._require_state())
+        await asyncio.wait_for(
+            self._send_notification(notification.group_id, notification.message),
+            timeout=_SEND_TIMEOUT_SECONDS,
+        )
 
     def _log_poll_error(
         self,

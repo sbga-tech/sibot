@@ -121,7 +121,7 @@ def event_key(event: AlertEvent) -> str:
     if isinstance(event, WeeklyResetAlert):
         return (
             f"weekly-reset:{event.source}:{event.credential_id}:"
-            f"{event.observed_at.isoformat()}"
+            f"{event.reset_at.isoformat()}"
         )
     if isinstance(event, ResetCreditIncreasedAlert):
         return (
@@ -201,6 +201,12 @@ def _evaluate_successful_account(
     events: list[AlertEvent],
 ) -> None:
     credential.auth_status = "normal"
+    if (
+        credential.weekly is not None
+        and account.weekly is not None
+        and _is_retired_cycle(credential.weekly, account.weekly)
+    ):
+        return
     previous_credits = credential.reset_credits_available
     current_credits = account.reset_credits_available
 
@@ -260,6 +266,11 @@ def _evaluate_weekly_quota(
             observed_at,
             thresholds,
             window_active=_is_directly_active(weekly),
+        )
+        credential.weekly.retired_reset_at = (
+            previous.reset_at
+            if weekly.reset_at > previous.reset_at + _RESET_TOLERANCE
+            else previous.retired_reset_at
         )
         return WeeklyResetAlert(
             kind="weekly_reset",
@@ -407,6 +418,20 @@ def _same_cycle(
     return abs(current.reset_at - previous.reset_at) <= _RESET_TOLERANCE
 
 
+def _is_retired_cycle(previous: WeeklyAlertState, current: CodexWeeklyQuota) -> bool:
+    if previous.window_seconds != current.window_seconds:
+        return False
+    if (
+        previous.retired_reset_at is not None
+        and current.reset_at <= previous.retired_reset_at + _RESET_TOLERANCE
+    ):
+        return True
+    return (
+        previous.window_active is True
+        and current.reset_at < previous.reset_at - _RESET_TOLERANCE
+    )
+
+
 def _detect_reset_source(
     previous: WeeklyAlertState,
     current: CodexWeeklyQuota,
@@ -414,17 +439,24 @@ def _detect_reset_source(
     previous_credits: int | None,
     current_credits: int | None,
 ) -> ResetSource | None:
-    cycle_changed = not _same_cycle(previous, current)
     remaining_increased = _effective_remaining(current) > previous.remaining_percent
-    active_cycle_changed = previous.window_active is True and cycle_changed
-    if not remaining_increased and not active_cycle_changed:
-        return None
-
-    if (
+    credit_used = (
         previous_credits is not None
         and current_credits is not None
         and current_credits < previous_credits
-    ):
+    )
+    if credit_used and remaining_increased:
+        return "reset_credit"
+
+    # A corrected percentage is not a new cycle. Re-arm thresholds only when
+    # an active window advances, not when snapshots fluctuate within a window.
+    cycle_advanced = (
+        not _same_cycle(previous, current)
+        and current.reset_at > previous.reset_at + _RESET_TOLERANCE
+    )
+    if previous.window_active is not True or not cycle_advanced:
+        return None
+    if credit_used:
         return "reset_credit"
     if (
         previous.window_active is True

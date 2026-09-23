@@ -23,6 +23,7 @@ class WeeklyAlertState(StateModel):
     notified_thresholds: set[int] = Field(default_factory=set)
     last_observed_at: datetime | None = None
     window_active: bool | None = None
+    retired_reset_at: datetime | None = None
 
 
 class SubscriptionAlertState(StateModel):
@@ -51,6 +52,7 @@ class PendingNotification(StateModel):
     created_at: datetime
     attempts: int = 0
     next_attempt_at: datetime
+    last_attempt_at: datetime | None = None
     subscription: PendingSubscription | None = None
 
 

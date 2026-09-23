@@ -25,6 +25,7 @@ _HISTORY_QUERY_CONCURRENCY = 4
 _LOOKBACK_HOURS = (24, 6)
 _MAX_SAMPLE_AGE = timedelta(minutes=30)
 _CYCLE_TIME_TOLERANCE = timedelta(minutes=2)
+_ROUTING_TIME_PRECISION = timedelta(seconds=1)
 _FULL_PERCENT = 100.0
 # Nominal subscription capacities, not CPA routing weights.
 _PLAN_CAPACITIES = {"pro-5x": 1, "pro-20x": 4}
@@ -184,7 +185,11 @@ def _pool_snapshot(
         routable = _routable(statuses[account.credential_id], now)
         if routable:
             available += weekly.remaining_percent * capacity
-        if routable and (
+        # Cooldowns can end at reset; disabled and zero-weight accounts cannot
+        # contribute then. Allow the timestamp precision difference between APIs.
+        if _routable(
+            statuses[account.credential_id], weekly.reset_at + _ROUTING_TIME_PRECISION
+        ) and (
             weekly.remaining_percent < _FULL_PERCENT
             or window_activity.get(account.credential_id) is True
         ):

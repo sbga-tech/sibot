@@ -1,5 +1,7 @@
 """NoneBot integration for Mzk1 AI."""
 
+from datetime import datetime
+
 from nonebot import (
     get_bots,
     get_driver,
@@ -50,6 +52,7 @@ portal_client = PortalClient(
     plugin_config.mzk1_ai_portal_admin_api_token,
 )
 state_store = StateStore(localstore.get_data_file("mzk1_ai", "state.json"))
+_NOTIFICATION_HISTORY_LIMIT = 100
 
 
 class BotNotConnectedError(RuntimeError):
@@ -57,14 +60,55 @@ class BotNotConnectedError(RuntimeError):
         super().__init__("OneBot V11 is not connected")
 
 
+class NotificationHistoryIncompleteError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("Group history does not cover the notification attempt")
+
+
+def _connected_bot() -> Bot:
+    for bot in get_bots().values():
+        if isinstance(bot, Bot):
+            return bot
+    raise BotNotConnectedError
+
+
 async def _send_group_message(group_id: int, message: str) -> None:
-    bots = [bot for bot in get_bots().values() if isinstance(bot, Bot)]
-    if not bots:
-        raise BotNotConnectedError
-    await bots[0].send_group_msg(
+    await _connected_bot().send_group_msg(
         group_id=group_id,
         message=Message(MessageSegment.text(message)),
     )
+
+
+async def _notification_was_delivered(
+    group_id: int, message: str, attempted_at: datetime
+) -> bool:
+    bot = _connected_bot()
+    since = int(attempted_at.timestamp())
+    expected = Message(MessageSegment.text(message))
+    cursor = 0
+    while True:
+        result = await bot.get_group_msg_history(
+            group_id=group_id,
+            count=_NOTIFICATION_HISTORY_LIMIT,
+            message_seq=cursor,
+        )
+        messages = result["messages"]
+        if not messages:
+            return False
+        for item in messages:
+            if item["time"] < since or str(item["sender"]["user_id"]) != bot.self_id:
+                continue
+            if Message(item["message"]) == expected:
+                return True
+        if (
+            len(messages) < _NOTIFICATION_HISTORY_LIMIT
+            or min(item["time"] for item in messages) < since
+        ):
+            return False
+        oldest = min(item["message_seq"] for item in messages)
+        if cursor and oldest >= cursor:
+            raise NotificationHistoryIncompleteError
+        cursor = oldest
 
 
 quota_monitor = QuotaMonitor(
@@ -72,6 +116,7 @@ quota_monitor = QuotaMonitor(
     store=state_store,
     config=plugin_config,
     send_notification=_send_group_message,
+    check_notification=_notification_was_delivered,
 )
 
 

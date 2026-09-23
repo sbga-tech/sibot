@@ -73,9 +73,9 @@ def _extract_account(
         return _invalid_weekly_account(credential, item, plan)
 
     remaining_percent = _MAX_PERCENT - row.used_percent
-    exhausted = (
-        row.limit_reached is True or row.allowed is False or remaining_percent <= 0
-    )
+    # Keeper copies account-wide flags onto every row, including the weekly row.
+    # A short-window limit must not look like weekly exhaustion or recovery.
+    exhausted = remaining_percent <= 0
     return _account(
         credential,
         status="completed",
