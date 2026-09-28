@@ -16,7 +16,7 @@ from .alerts import (
 )
 from .config import Config
 from .formatting import format_alert_batch
-from .models import CodexAccountQuota
+from .models import AccountQuota
 from .portal import (
     PortalClient,
     PortalProtocolError,
@@ -24,7 +24,7 @@ from .portal import (
     PortalUnavailableError,
     PortalUpstreamError,
 )
-from .quota import extract_codex_weekly_accounts
+from .quota import extract_accounts
 from .storage import (
     PendingNotification,
     PendingSubscription,
@@ -134,7 +134,7 @@ class QuotaMonitor:
         state = self._require_state()
         try:
             snapshot = await self._portal.quota()
-            accounts = extract_codex_weekly_accounts(snapshot)
+            accounts = extract_accounts(snapshot)
             self._log_invalid_accounts(accounts)
         except PortalUnauthorizedError as error:
             self._log_poll_error("unauthorized", error, error_level=True)
@@ -255,18 +255,18 @@ class QuotaMonitor:
         else:
             logger.warning(message, type(error).__name__)
 
-    def _log_invalid_accounts(self, accounts: list[CodexAccountQuota]) -> None:
-        invalid_count = sum(account.status == "invalid_weekly" for account in accounts)
+    def _log_invalid_accounts(self, accounts: list[AccountQuota]) -> None:
+        invalid_count = sum(account.status == "invalid" for account in accounts)
         if invalid_count == self._invalid_account_count:
             return
         self._invalid_account_count = invalid_count
         if invalid_count:
             logger.warning(
-                "Mzk1 AI found {} account(s) with incompatible Weekly quota data",
+                "Mzk1 AI found {} account(s) with incompatible quota data",
                 invalid_count,
             )
         else:
-            logger.info("Mzk1 AI account-level Weekly quota data recovered")
+            logger.info("Mzk1 AI account-level quota data recovered")
 
     def _enqueue_events(self, events: list[AlertEvent]) -> None:
         keys = sorted(event_key(event) for event in events)

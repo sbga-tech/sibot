@@ -40,6 +40,7 @@ class Config(BaseModel):
         "http://cpa-portal:8080/api/admin/v1"
     )
     mzk1_ai_portal_admin_api_token: SecretStr
+    # Historical name; the thresholds apply to every provider's weekly quota.
     mzk1_ai_codex_weekly_alert_thresholds: tuple[int, ...] = (50, 25, 10, 5, 0)
     mzk1_ai_subscription_alert_hours: tuple[Annotated[int, Field(gt=0)], ...] = Field(
         default=(72, 24), min_length=1

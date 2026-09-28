@@ -11,6 +11,7 @@ dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.0,<3.0",
     "nonebot2[websockets]>=2.5.0",
+    "pillow>=11",
 ]
 
 [tool.nonebot]

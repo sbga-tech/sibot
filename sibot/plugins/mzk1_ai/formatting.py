@@ -1,32 +1,33 @@
-"""Compact Chinese messages for narrow QQ mobile layouts."""
+"""Compact Chinese wording shared by text messages and rendered images."""
 
 from collections import Counter
-from collections.abc import Mapping
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .alerts import AlertEvent
 from .models import (
-    CodexAccountQuota,
+    PROVIDERS,
+    AccountQuota,
     CodexAccountResetCredits,
     ForecastScenario,
     PoolForecast,
-    RankingResponse,
+    Provider,
 )
 
-_DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
+DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _HTTP_UNAUTHORIZED = 401
-_FULL_PERCENT = 100.0
 _HOURS_PER_DAY = 24
 _SHORT_RUNWAY_HOURS = 48
-_PERIOD_LABELS = {
+PROVIDER_LABELS: dict[Provider, str] = {"codex": "Codex", "claude": "Claude"}
+_UPSTREAM_NAMES: dict[Provider, str] = {"codex": "OpenAI", "claude": "Anthropic"}
+PERIOD_LABELS = {
     "today": "今日",
     "yesterday": "昨日",
     "current_month": "本月",
     "previous_month": "上月",
 }
 _FORECAST_PROBLEMS = {
-    "no_accounts": "暂无 Codex 账号",
+    "no_accounts": "暂无账号",
     "missing_quota": "额度数据不完整",
     "stale_quota": "额度数据已过期",
     "unsupported_plans": "订阅额度无法换算",
@@ -47,141 +48,81 @@ def format_help() -> str:
     )
 
 
-def format_ranking(ranking: RankingResponse) -> str:
-    period = _PERIOD_LABELS[ranking.period]
-    lines = [f"Token 用量排名（{period}）"]
-    if not ranking.entries:
-        lines.append("暂无数据")
-    else:
-        lines.extend(
-            f"{entry.rank}. {entry.user.github_login}：{entry.value:,}"
-            for entry in ranking.entries
-        )
-    if ranking.stale:
-        lines.append("数据可能已过期")
-    return "\n".join(lines)
+def account_status(account: AccountQuota) -> str | None:
+    """Short status label, or None when the account has usable quota."""
+    if account.status == "failed" and account.http_status_code == _HTTP_UNAUTHORIZED:
+        return "登录失效"
+    if account.status == "unstarted":
+        return "本周未使用"
+    if account.status != "completed" or account.weekly is None:
+        return "额度暂不可用"
+    return None
 
 
-def format_quota(
-    accounts: list[CodexAccountQuota],
-    window_activity: Mapping[str, bool | None] | None = None,
-    forecast: PoolForecast | None = None,
-) -> str:
-    if not accounts:
-        return "Codex 额度\n暂无可用账号"
-
-    activity = window_activity or {}
-    lines = ["Codex 额度"]
-    if forecast is not None:
-        lines.extend(_format_forecast_summary(forecast))
-    lines.append("")
-    for account in accounts:
-        lines.extend(
-            _format_account_quota(
-                account,
-                window_active=activity.get(account.credential_id),
-            )
-        )
-    return "\n".join(lines)
-
-
-def _format_account_quota(
-    account: CodexAccountQuota,
-    *,
-    window_active: bool | None,
-) -> tuple[str, ...]:
-    plan = f" [{account.plan}]" if account.plan else ""
-    name = f"{account.display_name}{plan}"
-    if account.status == "failed":
-        message = (
-            "登录失效"
-            if account.http_status_code == _HTTP_UNAUTHORIZED
-            else "额度暂不可用"
-        )
-        return (name, message)
-    if account.status in {"missing", "invalid_weekly"} or account.weekly is None:
-        return (name, "额度暂不可用")
-
-    weekly = account.weekly
-    if weekly.exhausted:
-        status = "已用完"
-    else:
-        status = f"剩余{_format_percent(weekly.remaining_percent)}"
-    if (
-        weekly.exhausted
-        or weekly.remaining_percent < _FULL_PERCENT
-        or window_active is True
-    ):
-        status += f"，{_format_time(weekly.reset_at)}重置"
-    return (name, status)
-
-
-def format_reset_credits(accounts: list[CodexAccountResetCredits]) -> str:
-    if not accounts:
-        return "Codex 重置机会\n暂无可用账号"
-    return "Codex 重置机会\n" + "\n\n".join(
-        _format_account_reset_credits(account) for account in accounts
-    )
-
-
-def _format_account_reset_credits(account: CodexAccountResetCredits) -> str:
+def reset_credit_lines(account: CodexAccountResetCredits) -> tuple[str, list[str]]:
+    """Headline status and expiry detail lines for one account's reset credits."""
     response = account.response
     if response is None:
-        return f"{account.display_name}：查询失败"
+        return "查询失败", []
 
     count = response.available_count
     status = "可用次数未知" if count is None else f"可用 {count} 次"
-    lines = [f"{account.display_name}：{status}"]
     if count == 0:
-        return lines[0]
+        return status, []
 
     available = [credit for credit in response.credits if credit.status == "available"]
     expiries = Counter(
-        credit.expires_at.astimezone(_DISPLAY_TIMEZONE)
+        credit.expires_at.astimezone(DISPLAY_TIMEZONE)
         for credit in available
         if credit.expires_at is not None
     )
-    lines.extend(
-        f"{amount} 次于 {_format_time(expiry)} 过期"
+    details = [
+        f"{amount} 次于 {format_short_time(expiry)} 过期"
         for expiry, amount in sorted(expiries.items())
-    )
+    ]
     known_count = sum(expiries.values())
     if not expiries:
-        lines.append("过期时间未知")
+        details.append("过期时间未知")
     elif known_count < len(available) or (count is not None and known_count < count):
-        lines.append("部分过期时间未知")
-    return "\n".join(lines)
+        details.append("部分过期时间未知")
+    return status, details
 
 
 def format_alert_batch(events: list[AlertEvent]) -> str:
-    return "\n".join(("Codex 提醒", *map(_format_alert, events)))
+    lines: list[str] = []
+    for provider in PROVIDERS:
+        group = [event for event in events if event.provider == provider]
+        if group:
+            lines.append(f"{PROVIDER_LABELS[provider]} 提醒")
+            lines.extend(map(_format_alert, group))
+    return "\n".join(lines)
 
 
 def _format_alert(event: AlertEvent) -> str:
     if event.kind == "subscription_expiring":
         return (
-            f"{event.display_name}：订阅将在{_format_time(event.active_until)}到期，"
+            f"{event.display_name}：订阅将在{format_time(event.active_until)}到期，"
             f"剩余不超过{event.threshold_hours}小时，记得续费。"
         )
     if event.kind == "weekly_low":
         return (
             f"{event.display_name}：周额度只剩"
-            f"{_format_percent(event.remaining_percent)}，"
-            f"{_format_time(event.reset_at)}重置"
+            f"{format_percent(event.remaining_percent)}，"
+            f"{format_time(event.reset_at)}重置"
         )
     if event.kind == "weekly_exhausted":
-        return f"{event.display_name}：周额度已用完，{_format_time(event.reset_at)}重置"
+        return f"{event.display_name}：周额度已用完，{format_time(event.reset_at)}重置"
     if event.kind == "weekly_reset":
         if event.source == "scheduled":
             action = "周额度已正常重置"
         elif event.source == "reset_credit":
             action = "已使用重置机会"
         else:
-            action = "OpenAI已重置周额度"
+            action = f"{_UPSTREAM_NAMES[event.provider]}已重置周额度"
         return (
             f"{event.display_name}：{action}，"
-            f"当前剩余{_format_percent(event.remaining_percent)}，"
-            f"下次{_format_time(event.reset_at)}重置"
+            f"当前剩余{format_percent(event.remaining_percent)}，"
+            f"下次{format_time(event.reset_at)}重置"
         )
     if event.kind == "reset_credit_increased":
         return (
@@ -191,63 +132,43 @@ def _format_alert(event: AlertEvent) -> str:
     return f"{event.display_name}：登录已失效"
 
 
-def _format_forecast_summary(forecast: PoolForecast) -> list[str]:
-    lines = _format_forecast_balance(forecast)
+def forecast_lines(forecast: PoolForecast) -> list[str]:
+    """Pool summary lines, most important first."""
+    lines: list[str] = []
+    if forecast.remaining_points is not None:
+        remaining = f"池剩余 {forecast.remaining_points:.0f}%"
+        if forecast.available_points is not None and round(
+            forecast.available_points
+        ) != round(forecast.remaining_points):
+            remaining += f"，可用 {forecast.available_points:.0f}%"
+        if forecast.unit_plan is not None:
+            remaining += f"（{forecast.unit_plan}=100%）"
+        lines.append(remaining)
+    if forecast.next_reset_at is not None:
+        lines.append(f"最早重置 {format_short_time(forecast.next_reset_at)}")
     if forecast.problem is not None:
-        lines.append(_FORECAST_PROBLEMS[forecast.problem])
-    else:
-        lines.extend(_format_forecast_scenarios(forecast))
+        if forecast.problem != "unstarted_window":
+            lines.append(_FORECAST_PROBLEMS[forecast.problem])
+    elif forecast.scenario is not None:
+        lines.append(_format_scenario(forecast.scenario, forecast))
     if "routing_limited" in forecast.warnings:
         lines.append("部分账号暂不可用")
-    if "subscription_expiring" in forecast.warnings:
-        lines.append("有订阅将在重置前到期")
     return lines
 
 
-def _format_forecast_balance(forecast: PoolForecast) -> list[str]:
-    lines: list[str] = []
-    if forecast.remaining_plus_points is not None:
-        remaining = f"{forecast.remaining_plus_points:.1f}%"
-        if (
-            forecast.available_plus_points is not None
-            and forecast.available_plus_points != forecast.remaining_plus_points
-        ):
-            remaining += f"，可用{forecast.available_plus_points:.1f}%"
-        lines.append(f"现启用账号剩余{remaining}（Plus=100%）")
-    if forecast.next_reset_at is not None:
-        lines.append(f"最早重置：{_format_time(forecast.next_reset_at)}")
-    return lines
-
-
-def _format_forecast_scenarios(forecast: PoolForecast) -> list[str]:
-    if not forecast.scenarios:
-        return []
-    lines = [_format_primary_scenario(forecast.scenarios[0], forecast)]
-    if len(forecast.scenarios) > 1:
-        lines.append(
-            f"近6小时消耗：{forecast.scenarios[1].burn_plus_points_per_hour:.2f}%/小时"
-        )
-    return lines
-
-
-def _format_primary_scenario(scenario: ForecastScenario, forecast: PoolForecast) -> str:
-    rate = f"{scenario.burn_plus_points_per_hour:.2f}%/小时"
-    prefix = f"近{scenario.lookback_hours}小时消耗：{rate}"
+def _format_scenario(scenario: ForecastScenario, forecast: PoolForecast) -> str:
+    rate = f"近{scenario.lookback_hours}h {scenario.burn_points_per_hour:.1f}%/h"
     if scenario.runway_hours is None:
-        return f"{prefix}，暂无耗尽估计"
+        return f"{rate}，暂无耗尽估计"
     if scenario.runway_hours <= 0:
-        return f"{prefix}，当前可用额度已见底"
+        return f"{rate}，可用额度已见底"
     if scenario.reaches_reset:
-        return f"{prefix}，预计能撑到最早重置"
+        return f"{rate}，能撑到重置"
     exhaustion = forecast.generated_at + timedelta(hours=scenario.runway_hours)
-    exhaustion_time = _format_time(exhaustion)
-    result = (
-        f"{prefix}，约剩{_format_duration(scenario.runway_hours)}"
-        f"（预计{exhaustion_time}耗尽）"
+    return (
+        f"{rate}，约{_format_duration(scenario.runway_hours)}后"
+        f"（{format_time(exhaustion)}）耗尽"
     )
-    if scenario.target_fraction is not None:
-        result += f"；要撑到最早重置，需降至当前消耗的约{scenario.target_fraction:.0%}"
-    return result
 
 
 def _format_duration(hours: float) -> str:
@@ -258,10 +179,15 @@ def _format_duration(hours: float) -> str:
     return f"{hours / _HOURS_PER_DAY:.1f}天"
 
 
-def _format_percent(value: float) -> str:
-    return f"{value:g}%"
+def format_percent(value: float) -> str:
+    return f"{value:.0f}%"
 
 
-def _format_time(value: datetime) -> str:
-    local = value.astimezone(_DISPLAY_TIMEZONE)
+def format_time(value: datetime) -> str:
+    local = value.astimezone(DISPLAY_TIMEZONE)
     return f"{local.month}月{local.day}日{local:%H:%M}"
+
+
+def format_short_time(value: datetime) -> str:
+    local = value.astimezone(DISPLAY_TIMEZONE)
+    return f"{local:%m-%d %H:%M}"

@@ -10,8 +10,8 @@
 
 - `sibot/plugins/mzk1_ai/commands.py` parses `/ai` arguments and should remain free of network calls.
 - `portal.py` owns the async Portal client and its protocol/error mapping. `models.py` owns validated upstream models and small immutable domain values.
-- `quota.py` extracts the supported Codex weekly window. `forecast.py` computes shared-pool forecasts from reset-separated quota history; it must not predict individual-account exhaustion or simulate CPA's routing weights.
-- `formatting.py` owns compact Chinese output suitable for narrow QQ clients. Keep user-facing wording there rather than in request or calculation code.
+- `quota.py` extracts each supported provider's (Codex, Claude) account windows from Keeper's quota cache. `forecast.py` computes per-provider shared-pool forecasts from reset-separated quota history; it must not predict individual-account exhaustion or simulate CPA's routing weights. Claude forecasts need Keeper's Claude quota history (cpa-usage-keeper PR #584); without it they report missing history.
+- `formatting.py` owns compact Chinese wording suitable for narrow QQ clients; keep user-facing wording there rather than in request or calculation code. `render.py` draws `/ai quota`, `/ai rank`, and `/ai reset` as PNG images (Pillow, Maple Mono Normal NL NF CN fetched and checksum-pinned in the `Dockerfile`) using that wording; `avatars.py` owns the bounded, file-cached avatar downloads for rankings. Alerts and help stay text because notification delivery is confirmed by comparing message text in group history.
 - `monitor.py` owns periodic quota polling, persisted alert state, retry, and notification delivery. On-demand commands must not mutate monitor state or enqueue notifications.
 - Persistent plugin state belongs under `nonebot_plugin_localstore`; keep state writes atomic and do not store credentials or upstream secrets.
 - Target-group filtering, environment configuration, and OneBot sending behavior should follow the existing plugin helpers rather than introducing parallel abstractions.
@@ -29,5 +29,5 @@
 ## Verification
 
 - For Python source changes, use the checks already defined in `.github/workflows/ci.yml`: `uv run ruff format --check .`, `uv run ruff check .`, and `uv run basedpyright`.
-- For command, formatting, Portal-client, or forecast changes, keep verification within the existing project checks unless the user explicitly requests another procedure.
+- For command, formatting, monitor, or Portal-client changes, exercise the behavior in the workspace sandbox (`../itest`, see its `README.md`): drive `/ai` commands with `./itest say`, shape quota with `./itest quota`, observe alerts with `./itest messages`, and shift the bot's clock with `./itest time`. Do not write ad-hoc fake Portal or OneBot servers; extend `itest` when it lacks a needed capability. Forecast semantics over multi-day history cannot be produced there and remain a review concern.
 - Do not deploy the bot, change production configuration, or send real OneBot messages unless the user explicitly authorizes that operation.

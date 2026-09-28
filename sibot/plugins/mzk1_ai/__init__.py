@@ -1,6 +1,7 @@
 """NoneBot integration for Mzk1 AI."""
 
-from datetime import datetime
+import asyncio
+from datetime import datetime, timezone
 
 from nonebot import (
     get_bots,
@@ -18,18 +19,15 @@ from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import Rule
 
+from .avatars import AvatarCache
 from .commands import AICommand, CommandUsageError, parse_ai_command
 from .config import Config
-from .forecast import load_pool_forecast
-from .formatting import (
-    format_help,
-    format_quota,
-    format_ranking,
-    format_reset_credits,
-)
+from .forecast import load_forecasts
+from .formatting import format_help
 from .monitor import QuotaMonitor
 from .portal import PortalClient, PortalError
-from .quota import extract_codex_weekly_accounts
+from .quota import extract_accounts
+from .render import render_quota, render_ranking, render_reset_credits
 from .reset import load_reset_credits
 from .scope import is_target_group
 from .storage import StateStore
@@ -39,7 +37,7 @@ import nonebot_plugin_localstore as localstore
 
 __plugin_meta__ = PluginMetadata(
     name="Mzk1 AI",
-    description="CPA Token 排名、Codex 周额度提醒、全池续航和重置机会查询。",
+    description="CPA Token 排名、Codex/Claude 额度提醒、续航和重置机会查询。",
     usage="/ai, /ai rank [period], /ai quota, /ai reset",
     type="application",
     config=Config,
@@ -52,6 +50,7 @@ portal_client = PortalClient(
     plugin_config.mzk1_ai_portal_admin_api_token,
 )
 state_store = StateStore(localstore.get_data_file("mzk1_ai", "state.json"))
+avatar_cache = AvatarCache(localstore.get_cache_dir("mzk1_ai") / "avatars")
 _NOTIFICATION_HISTORY_LIMIT = 100
 
 
@@ -140,35 +139,53 @@ async def handle_ai_command(
     try:
         command = parse_ai_command(argument.extract_plain_text())
     except CommandUsageError:
-        message = format_help()
+        message = MessageSegment.text(format_help())
     else:
         message = await _execute_command(command)
-    await matcher.finish(Message(MessageSegment.text(message)))
+    await matcher.finish(Message(message))
 
 
-async def _execute_command(command: AICommand) -> str:
+async def _execute_command(command: AICommand) -> MessageSegment:
     try:
         return await _load_command_message(command)
     except PortalError as error:
         logger.error("Mzk1 AI command failed: {}", type(error).__name__)
     except Exception:  # noqa: BLE001
         logger.exception("Mzk1 AI command failed unexpectedly")
-    return "查询失败，请稍后再试。"
+    return MessageSegment.text("查询失败，请稍后再试。")
 
 
-async def _load_command_message(command: AICommand) -> str:
+async def _load_command_message(command: AICommand) -> MessageSegment:
     if command.action == "rank" and command.period is not None:
         response = await portal_client.ranking(command.period)
-        return format_ranking(response)
+        avatars = await avatar_cache.load(
+            [entry.user.avatar_url for entry in response.entries]
+        )
+        return MessageSegment.image(
+            await asyncio.to_thread(render_ranking, response, avatars)
+        )
     if command.action == "quota":
         snapshot = await portal_client.quota()
-        accounts = extract_codex_weekly_accounts(snapshot)
+        accounts = extract_accounts(snapshot)
         activity = quota_monitor.weekly_window_activity()
-        forecast = await load_pool_forecast(portal_client, accounts, activity)
-        return format_quota(accounts, activity, forecast)
+        forecasts = await load_forecasts(
+            portal_client,
+            accounts,
+            activity,
+        )
+        return MessageSegment.image(
+            await asyncio.to_thread(
+                render_quota, accounts, forecasts, activity, datetime.now(timezone.utc)
+            )
+        )
     if command.action == "reset":
-        return format_reset_credits(await load_reset_credits(portal_client))
-    return format_help()
+        accounts = await load_reset_credits(portal_client)
+        return MessageSegment.image(
+            await asyncio.to_thread(
+                render_reset_credits, accounts, datetime.now(timezone.utc)
+            )
+        )
+    return MessageSegment.text(format_help())
 
 
 driver = get_driver()
@@ -185,6 +202,7 @@ async def stop_mzk1_ai() -> None:
         await quota_monitor.stop()
     finally:
         await portal_client.close()
+        await avatar_cache.close()
 
 
 @driver.on_bot_connect

@@ -1,24 +1,29 @@
-"""State transitions for Codex Weekly quota and login alerts."""
+"""State transitions for subscription weekly quota and login alerts."""
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal, TypeAlias
 
-from .models import CodexAccountQuota, CodexWeeklyQuota
+from .models import AccountQuota, Provider, WindowQuota
 from .storage import CredentialAlertState, PersistedState, WeeklyAlertState
 
 _RESET_TOLERANCE = timedelta(minutes=2)
 _WINDOW_ACTIVITY_SAMPLE_INTERVAL = timedelta(minutes=4)
 _FULL_PERCENT = 100.0
 _EXHAUSTED_THRESHOLD = 0
+# Remaining-percent gain within one reset cycle that counts as a restore
+# rather than a corrected snapshot.
+_RESTORE_MIN_PERCENT = 25.0
 _HTTP_UNAUTHORIZED = 401
 
-ResetSource: TypeAlias = Literal["scheduled", "reset_credit", "openai"]
+# "upstream" means the provider restored quota before the scheduled reset.
+ResetSource: TypeAlias = Literal["scheduled", "reset_credit", "upstream"]
 
 
 @dataclass(frozen=True, slots=True)
 class WeeklyLowAlert:
     kind: Literal["weekly_low"]
+    provider: Provider
     credential_id: str
     display_name: str
     remaining_percent: float
@@ -30,6 +35,7 @@ class WeeklyLowAlert:
 @dataclass(frozen=True, slots=True)
 class WeeklyExhaustedAlert:
     kind: Literal["weekly_exhausted"]
+    provider: Provider
     credential_id: str
     display_name: str
     reset_at: datetime
@@ -39,6 +45,7 @@ class WeeklyExhaustedAlert:
 @dataclass(frozen=True, slots=True)
 class WeeklyResetAlert:
     kind: Literal["weekly_reset"]
+    provider: Provider
     credential_id: str
     display_name: str
     source: ResetSource
@@ -50,6 +57,7 @@ class WeeklyResetAlert:
 @dataclass(frozen=True, slots=True)
 class ResetCreditIncreasedAlert:
     kind: Literal["reset_credit_increased"]
+    provider: Provider
     credential_id: str
     display_name: str
     added_count: int
@@ -60,6 +68,7 @@ class ResetCreditIncreasedAlert:
 @dataclass(frozen=True, slots=True)
 class SubscriptionExpiringAlert:
     kind: Literal["subscription_expiring"]
+    provider: Provider
     credential_id: str
     display_name: str
     active_until: datetime
@@ -70,6 +79,7 @@ class SubscriptionExpiringAlert:
 @dataclass(frozen=True, slots=True)
 class LoginInvalidAlert:
     kind: Literal["login_invalid"]
+    provider: Provider
     credential_id: str
     display_name: str
     observed_at: datetime
@@ -93,7 +103,7 @@ class AlertEvaluation:
 
 def evaluate_accounts(
     state: PersistedState,
-    accounts: list[CodexAccountQuota],
+    accounts: list[AccountQuota],
     thresholds: tuple[int, ...],
 ) -> AlertEvaluation:
     """Apply new cache observations to persisted state."""
@@ -133,7 +143,7 @@ def event_key(event: AlertEvent) -> str:
 
 def _evaluate_account(
     state: PersistedState,
-    account: CodexAccountQuota,
+    account: AccountQuota,
     thresholds: tuple[int, ...],
     events: list[AlertEvent],
 ) -> bool:
@@ -175,7 +185,7 @@ def _already_observed(
 
 def _evaluate_failed_account(
     credential: CredentialAlertState,
-    account: CodexAccountQuota,
+    account: AccountQuota,
     observed_at: datetime,
     events: list[AlertEvent],
 ) -> None:
@@ -185,6 +195,7 @@ def _evaluate_failed_account(
         events.append(
             LoginInvalidAlert(
                 kind="login_invalid",
+                provider=account.provider,
                 credential_id=account.credential_id,
                 display_name=account.display_name,
                 observed_at=observed_at,
@@ -195,7 +206,7 @@ def _evaluate_failed_account(
 
 def _evaluate_successful_account(
     credential: CredentialAlertState,
-    account: CodexAccountQuota,
+    account: AccountQuota,
     observed_at: datetime,
     thresholds: tuple[int, ...],
     events: list[AlertEvent],
@@ -234,7 +245,7 @@ def _evaluate_successful_account(
 
 def _evaluate_weekly_quota(
     credential: CredentialAlertState,
-    account: CodexAccountQuota,
+    account: AccountQuota,
     thresholds: tuple[int, ...],
     previous_credits: int | None,
     current_credits: int | None,
@@ -274,6 +285,7 @@ def _evaluate_weekly_quota(
         )
         return WeeklyResetAlert(
             kind="weekly_reset",
+            provider=account.provider,
             credential_id=account.credential_id,
             display_name=account.display_name,
             source=reset_source,
@@ -293,7 +305,7 @@ def _evaluate_weekly_quota(
 
 
 def _reset_credit_increase_event(
-    account: CodexAccountQuota,
+    account: AccountQuota,
     observed_at: datetime,
     previous_credits: int | None,
     current_credits: int | None,
@@ -306,6 +318,7 @@ def _reset_credit_increase_event(
         return None
     return ResetCreditIncreasedAlert(
         kind="reset_credit_increased",
+        provider=account.provider,
         credential_id=account.credential_id,
         display_name=account.display_name,
         added_count=current_credits - previous_credits,
@@ -316,7 +329,7 @@ def _reset_credit_increase_event(
 
 def _threshold_event(
     previous: WeeklyAlertState,
-    account: CodexAccountQuota,
+    account: AccountQuota,
     thresholds: tuple[int, ...],
 ) -> AlertEvent | None:
     weekly = account.weekly
@@ -337,6 +350,7 @@ def _threshold_event(
     if weekly.exhausted or _EXHAUSTED_THRESHOLD in crossed:
         return WeeklyExhaustedAlert(
             kind="weekly_exhausted",
+            provider=account.provider,
             credential_id=account.credential_id,
             display_name=account.display_name,
             reset_at=weekly.reset_at,
@@ -344,6 +358,7 @@ def _threshold_event(
         )
     return WeeklyLowAlert(
         kind="weekly_low",
+        provider=account.provider,
         credential_id=account.credential_id,
         display_name=account.display_name,
         remaining_percent=current_remaining,
@@ -354,7 +369,7 @@ def _threshold_event(
 
 
 def _new_weekly_baseline(
-    weekly: CodexWeeklyQuota,
+    weekly: WindowQuota,
     observed_at: datetime,
     thresholds: tuple[int, ...],
     *,
@@ -373,23 +388,23 @@ def _new_weekly_baseline(
     )
 
 
-def _effective_remaining(weekly: CodexWeeklyQuota) -> float:
+def _effective_remaining(weekly: WindowQuota) -> float:
     return 0.0 if weekly.exhausted else weekly.remaining_percent
 
 
-def _initial_window_activity(weekly: CodexWeeklyQuota) -> bool | None:
+def _initial_window_activity(weekly: WindowQuota) -> bool | None:
     if _is_directly_active(weekly):
         return True
     return None
 
 
-def _is_directly_active(weekly: CodexWeeklyQuota) -> bool:
+def _is_directly_active(weekly: WindowQuota) -> bool:
     return weekly.exhausted or _effective_remaining(weekly) < _FULL_PERCENT
 
 
 def _detect_window_activity(
     previous: WeeklyAlertState,
-    current: CodexWeeklyQuota,
+    current: WindowQuota,
     observed_at: datetime,
 ) -> bool | None:
     if _is_directly_active(current):
@@ -411,14 +426,14 @@ def _detect_window_activity(
 
 def _same_cycle(
     previous: WeeklyAlertState,
-    current: CodexWeeklyQuota,
+    current: WindowQuota,
 ) -> bool:
     if previous.window_seconds != current.window_seconds:
         return False
     return abs(current.reset_at - previous.reset_at) <= _RESET_TOLERANCE
 
 
-def _is_retired_cycle(previous: WeeklyAlertState, current: CodexWeeklyQuota) -> bool:
+def _is_retired_cycle(previous: WeeklyAlertState, current: WindowQuota) -> bool:
     if previous.window_seconds != current.window_seconds:
         return False
     if (
@@ -434,7 +449,7 @@ def _is_retired_cycle(previous: WeeklyAlertState, current: CodexWeeklyQuota) -> 
 
 def _detect_reset_source(
     previous: WeeklyAlertState,
-    current: CodexWeeklyQuota,
+    current: WindowQuota,
     observed_at: datetime,
     previous_credits: int | None,
     current_credits: int | None,
@@ -445,22 +460,28 @@ def _detect_reset_source(
         and current_credits is not None
         and current_credits < previous_credits
     )
-    if credit_used and remaining_increased:
+    active = previous.window_active is True
+    same_cycle = _same_cycle(previous, current)
+    advanced = (
+        not same_cycle and current.reset_at > previous.reset_at + _RESET_TOLERANCE
+    )
+    if credit_used and (remaining_increased or (active and advanced)):
         return "reset_credit"
 
     # A corrected percentage is not a new cycle. Re-arm thresholds only when
-    # an active window advances, not when snapshots fluctuate within a window.
-    cycle_advanced = (
-        not _same_cycle(previous, current)
-        and current.reset_at > previous.reset_at + _RESET_TOLERANCE
-    )
-    if previous.window_active is not True or not cycle_advanced:
+    # an active window advances, or when the provider restores a large part of
+    # it without moving the reset time (Anthropic does this), not when
+    # snapshots fluctuate within a window.
+    if not active:
         return None
-    if credit_used:
-        return "reset_credit"
-    if (
-        previous.window_active is True
-        and observed_at >= previous.reset_at - _RESET_TOLERANCE
-    ):
+    if same_cycle:
+        restored = (
+            _effective_remaining(current) - previous.remaining_percent
+            >= _RESTORE_MIN_PERCENT
+        )
+        return "upstream" if restored else None
+    if not advanced:
+        return None
+    if observed_at >= previous.reset_at - _RESET_TOLERANCE:
         return "scheduled"
-    return "openai"
+    return "upstream"

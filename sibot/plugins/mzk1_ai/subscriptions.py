@@ -1,9 +1,14 @@
-"""Subscription reminders driven by wall-clock time, not quota refreshes."""
+"""Subscription reminders driven by wall-clock time, not quota refreshes.
+
+Only credentials whose provider reports an expiry (Codex id_token claims)
+produce reminders; Claude credentials carry no expiry.
+"""
 
 from datetime import datetime, timedelta
 
 from .alerts import AlertEvaluation, AlertEvent, SubscriptionExpiringAlert
 from .models import QuotaCredential
+from .quota import credential_provider
 from .storage import CredentialAlertState, PersistedState, SubscriptionAlertState
 
 
@@ -16,7 +21,7 @@ def evaluate_subscriptions(
     active_expiries = {
         credential.credential_id: credential.subscription_active_until
         for credential in credentials
-        if credential.provider.lower() == "codex"
+        if credential_provider(credential) is not None
         and not credential.disabled
         and credential.subscription_active_until is not None
     }
@@ -35,11 +40,8 @@ def evaluate_subscriptions(
     changed = len(pending) != len(state.pending_notifications)
     for credential in credentials:
         active_until = credential.subscription_active_until
-        if (
-            credential.provider.lower() != "codex"
-            or credential.disabled
-            or active_until is None
-        ):
+        provider = credential_provider(credential)
+        if provider is None or credential.disabled or active_until is None:
             continue
         account = state.credentials.get(credential.credential_id)
         if account is None:
@@ -64,6 +66,7 @@ def evaluate_subscriptions(
         events.append(
             SubscriptionExpiringAlert(
                 kind="subscription_expiring",
+                provider=provider,
                 credential_id=credential.credential_id,
                 display_name=credential.display_name,
                 active_until=active_until,

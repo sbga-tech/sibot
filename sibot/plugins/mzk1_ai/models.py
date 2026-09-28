@@ -20,6 +20,12 @@ RankingPeriod: TypeAlias = Literal[
     "current_month",
     "previous_month",
 ]
+Provider: TypeAlias = Literal["codex", "claude"]
+PROVIDERS: tuple[Provider, ...] = ("codex", "claude")
+# "unstarted": the provider has not opened the weekly window yet (no reset time).
+AccountStatus: TypeAlias = Literal[
+    "completed", "failed", "missing", "invalid", "unstarted"
+]
 
 
 class PortalModel(BaseModel):
@@ -203,7 +209,7 @@ class CodexAccountResetCredits:
 
 
 @dataclass(frozen=True, slots=True)
-class CodexWeeklyQuota:
+class WindowQuota:
     remaining_percent: float
     exhausted: bool
     reset_at: datetime
@@ -212,14 +218,24 @@ class CodexWeeklyQuota:
 
 
 @dataclass(frozen=True, slots=True)
-class CodexAccountQuota:
+class ModelWindowQuota:
+    label: str
+    remaining_percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class AccountQuota:
+    provider: Provider
     credential_id: str
     display_name: str
-    status: Literal["completed", "failed", "missing", "invalid_weekly"]
+    status: AccountStatus
     refreshed_at: datetime | None
     http_status_code: int | None
     plan: str | None
-    weekly: CodexWeeklyQuota | None
+    weekly: WindowQuota | None
+    five_hour: WindowQuota | None = None
+    models: tuple[ModelWindowQuota, ...] = ()
+    extra_usage_percent: float | None = None
     reset_credits_available: int | None = None
     subscription_active_until: datetime | None = None
 
@@ -269,7 +285,7 @@ class QuotaHistoryResponse(PortalModel):
 @dataclass(frozen=True, slots=True)
 class ForecastScenario:
     lookback_hours: int
-    burn_plus_points_per_hour: float
+    burn_points_per_hour: float
     runway_hours: float | None
     reaches_reset: bool | None
     target_fraction: float | None
@@ -284,18 +300,19 @@ ForecastProblem: TypeAlias = Literal[
     "unstarted_window",
     "missing_history",
 ]
-ForecastWarning: TypeAlias = Literal[
-    "routing_limited", "short_history", "subscription_expiring"
-]
+ForecastWarning: TypeAlias = Literal["routing_limited"]
 
 
 @dataclass(frozen=True, slots=True)
 class PoolForecast:
+    provider: Provider
     generated_at: datetime
     problem: ForecastProblem | None = None
-    remaining_plus_points: float | None = None
-    available_plus_points: float | None = None
+    # Plan whose full weekly quota counts as 100 pool points.
+    unit_plan: str | None = None
+    remaining_points: float | None = None
+    available_points: float | None = None
     next_reset_at: datetime | None = None
     observed_at: datetime | None = None
-    scenarios: tuple[ForecastScenario, ...] = ()
+    scenario: ForecastScenario | None = None
     warnings: tuple[ForecastWarning, ...] = ()
