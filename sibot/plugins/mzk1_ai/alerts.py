@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Literal, TypeAlias
 
 from .models import AccountQuota, Provider, WindowQuota
+from .quota import is_login_invalid
 from .storage import CredentialAlertState, PersistedState, WeeklyAlertState
 
 _RESET_TOLERANCE = timedelta(minutes=2)
@@ -14,7 +15,6 @@ _EXHAUSTED_THRESHOLD = 0
 # Remaining-percent gain within one reset cycle that counts as a restore
 # rather than a corrected snapshot.
 _RESTORE_MIN_PERCENT = 25.0
-_HTTP_UNAUTHORIZED = 401
 
 # "upstream" means the provider restored quota before the scheduled reset.
 ResetSource: TypeAlias = Literal["scheduled", "reset_credit", "upstream"]
@@ -189,7 +189,7 @@ def _evaluate_failed_account(
     observed_at: datetime,
     events: list[AlertEvent],
 ) -> None:
-    if account.http_status_code != _HTTP_UNAUTHORIZED:
+    if not is_login_invalid(account):
         return
     if credential.auth_status != "invalid":
         events.append(

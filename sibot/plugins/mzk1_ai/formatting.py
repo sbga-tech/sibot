@@ -13,9 +13,9 @@ from .models import (
     PoolForecast,
     Provider,
 )
+from .quota import is_login_invalid
 
 DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
-_HTTP_UNAUTHORIZED = 401
 _HOURS_PER_DAY = 24
 _SHORT_RUNWAY_HOURS = 48
 PROVIDER_LABELS: dict[Provider, str] = {"codex": "Codex", "claude": "Claude"}
@@ -50,7 +50,7 @@ def format_help() -> str:
 
 def account_status(account: AccountQuota) -> str | None:
     """Short status label, or None when the account has usable quota."""
-    if account.status == "failed" and account.http_status_code == _HTTP_UNAUTHORIZED:
+    if is_login_invalid(account):
         return "登录失效"
     if account.status == "unstarted":
         return "本周未使用"

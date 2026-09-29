@@ -20,6 +20,7 @@ from .models import (
 WEEKLY_WINDOW_SECONDS = 7 * 24 * 60 * 60
 FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60
 _MAX_PERCENT = 100
+_HTTP_UNAUTHORIZED = 401
 
 # Keeper row keys for each provider's account-wide windows. Codex reports its
 # windows by role, so the weekly one is identified by length.
@@ -53,6 +54,11 @@ def credential_provider(credential: QuotaCredential) -> Provider | None:
         if provider == known:
             return known
     return None
+
+
+def is_login_invalid(account: AccountQuota) -> bool:
+    """Keeper could not query the account because its login was rejected."""
+    return account.status == "failed" and account.http_status_code == _HTTP_UNAUTHORIZED
 
 
 def _extract_account(

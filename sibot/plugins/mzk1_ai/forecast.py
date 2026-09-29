@@ -21,7 +21,7 @@ from .models import (
     QuotaRoutingSnapshot,
 )
 from .portal import PortalClient, PortalError
-from .quota import WEEKLY_WINDOW_SECONDS
+from .quota import WEEKLY_WINDOW_SECONDS, is_login_invalid
 
 _HISTORY_QUERY_CONCURRENCY = 4
 # Recent consumption predicts the next hours best; fall back to the shorter
@@ -128,10 +128,13 @@ def forecast_pool(  # noqa: PLR0913
     window_activity: Mapping[str, bool | None],
 ) -> PoolForecast:
     """Estimate the whole pool only up to its next known natural replenishment."""
-    problem = _quota_problem(accounts, now)
+    # A rejected login takes the account out of CPA routing, so its quota is
+    # neither available nor consumed; leave it out of the pool entirely.
+    pool = [account for account in accounts if not is_login_invalid(account)]
+    problem = _quota_problem(pool, now)
     if problem is not None:
         return PoolForecast(provider=provider, generated_at=now, problem=problem)
-    capacities = _capacities(provider, accounts)
+    capacities = _capacities(provider, pool)
     if capacities is None:
         return PoolForecast(
             provider=provider, generated_at=now, problem="unsupported_plans"
@@ -139,7 +142,7 @@ def forecast_pool(  # noqa: PLR0913
     unit_plan, weights = capacities
     forecast = _pool_snapshot(
         provider,
-        accounts,
+        pool,
         weights,
         unit_plan=unit_plan,
         routing=routing,
@@ -149,15 +152,21 @@ def forecast_pool(  # noqa: PLR0913
     if forecast.problem is not None:
         return forecast
 
-    weekly_histories = [
-        _weekly_history(account, histories.get(account.credential_id), now)
-        for account in accounts
-    ]
-    if any(history is None for history in weekly_histories):
+    # Unstarted windows have no history and nothing has been consumed yet.
+    weekly_histories = {
+        account.credential_id: _weekly_history(
+            account, histories.get(account.credential_id), now
+        )
+        for account in pool
+        if account.weekly is not None
+    }
+    complete_histories = {
+        credential_id: history
+        for credential_id, history in weekly_histories.items()
+        if history is not None
+    }
+    if len(complete_histories) < len(weekly_histories):
         return replace(forecast, problem="missing_history")
-    complete_histories = [
-        history for history in weekly_histories if history is not None
-    ]
     scenario = next(
         (
             scenario
@@ -166,7 +175,7 @@ def forecast_pool(  # noqa: PLR0913
                 scenario := _scenario(
                     forecast,
                     complete_histories,
-                    accounts,
+                    pool,
                     weights=weights,
                     routing=routing,
                     hours=hours,
@@ -180,7 +189,7 @@ def forecast_pool(  # noqa: PLR0913
         return replace(forecast, problem="missing_history")
     observed_at = min(
         max(cycle.last_observed_at for cycle in history)
-        for history in complete_histories
+        for history in complete_histories.values()
     )
     if forecast.observed_at is not None:
         observed_at = min(observed_at, forecast.observed_at)
@@ -193,6 +202,11 @@ def _quota_problem(
     if not accounts:
         return "no_accounts"
     for account in accounts:
+        # An unstarted window is a full, untouched quota with no reset time yet.
+        if account.status == "unstarted":
+            if not _fresh(account.refreshed_at, now):
+                return "stale_quota"
+            continue
         weekly = account.weekly
         if account.status != "completed" or weekly is None:
             return "missing_quota"
@@ -244,19 +258,25 @@ def _pool_snapshot(  # noqa: PLR0913
     reset_times: list[datetime] = []
     for account in accounts:
         weekly = account.weekly
-        assert weekly is not None  # Validated by _quota_problem.
+        # Validated by _quota_problem: an unstarted account has a full quota
+        # and no reset time until it is used.
+        balance = _FULL_PERCENT if weekly is None else weekly.remaining_percent
         capacity = weights[account.credential_id]
-        remaining += weekly.remaining_percent * capacity
-        routable = _routable(statuses[account.credential_id], now)
-        if routable:
-            available += weekly.remaining_percent * capacity
+        remaining += balance * capacity
+        if _routable(statuses[account.credential_id], now):
+            available += balance * capacity
         # Cooldowns can end at reset; disabled and zero-weight accounts cannot
         # contribute then.
-        if _routable(
-            statuses[account.credential_id], weekly.reset_at + _ROUTING_RESET_TOLERANCE
-        ) and (
-            weekly.remaining_percent < _FULL_PERCENT
-            or window_activity.get(account.credential_id) is True
+        if (
+            weekly is not None
+            and _routable(
+                statuses[account.credential_id],
+                weekly.reset_at + _ROUTING_RESET_TOLERANCE,
+            )
+            and (
+                weekly.remaining_percent < _FULL_PERCENT
+                or window_activity.get(account.credential_id) is True
+            )
         ):
             reset_times.append(weekly.reset_at)
     next_reset = min(reset_times) if reset_times else None
@@ -329,7 +349,7 @@ def _weekly_history(
 
 def _scenario(  # noqa: PLR0913
     forecast: PoolForecast,
-    histories: Sequence[Sequence[QuotaHistoryCycle]],
+    histories: Mapping[str, Sequence[QuotaHistoryCycle]],
     accounts: Sequence[AccountQuota],
     *,
     weights: Mapping[str, int],
@@ -338,17 +358,17 @@ def _scenario(  # noqa: PLR0913
 ) -> ForecastScenario | None:
     end = forecast.generated_at
     start = end - timedelta(hours=hours)
-    burns = [_covered_burn(history, start, end) for history in histories]
-    if any(burn is None for burn in burns):
-        return None
+    burns: dict[str, float] = {}
+    for credential_id, history in histories.items():
+        burn = _covered_burn(history, start, end)
+        if burn is None:
+            return None
+        burns[credential_id] = burn
     # Fixed unit-plan points: do not divide by today's pool size. An account
-    # now in cooldown still contributes its observed consumption.
+    # now in cooldown still contributes its observed consumption; an unstarted
+    # account has consumed nothing.
     rate = (
-        sum(
-            burn * weights[account.credential_id]
-            for account, burn in zip(accounts, burns, strict=True)
-            if burn is not None
-        )
+        sum(burn * weights[credential_id] for credential_id, burn in burns.items())
         / hours
     )
     if rate <= 0:
@@ -358,14 +378,18 @@ def _scenario(  # noqa: PLR0913
     refill_hours = (forecast.next_reset_at - end).total_seconds() / 3600
     statuses = {item.credential_id: item for item in routing.credentials}
     projected_balance = 0.0
-    for account, burn in zip(accounts, burns, strict=True):
+    for account in accounts:
         if not _routable(statuses[account.credential_id], end):
             continue
-        assert account.weekly is not None and account.refreshed_at is not None
-        assert burn is not None
+        weekly = account.weekly
+        if weekly is None:
+            projected_balance += _FULL_PERCENT * weights[account.credential_id]
+            continue
+        assert account.refreshed_at is not None
+        burn = burns[account.credential_id]
         age_hours = max(0.0, (end - account.refreshed_at).total_seconds() / 3600)
         projected_balance += (
-            max(0.0, account.weekly.remaining_percent - burn / hours * age_hours)
+            max(0.0, weekly.remaining_percent - burn / hours * age_hours)
             * weights[account.credential_id]
         )
     runway_hours = projected_balance / rate
