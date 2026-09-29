@@ -33,9 +33,21 @@ _CYCLE_TIME_TOLERANCE = timedelta(minutes=2)
 # to 30 s of jitter); an account whose cooldown ends then still refills.
 _ROUTING_RESET_TOLERANCE = timedelta(minutes=2)
 _FULL_PERCENT = 100.0
-# One account's full Plus weekly quota is 100 pool points.
-_CODEX_UNIT_PLAN = "plus"
-_CODEX_PLAN_CAPACITIES = {"plus": 1, "pro-5x": 5, "pro-20x": 20}
+# Weekly capacity of each plan in units of the provider's base plan; one base
+# plan's full weekly quota is 100 pool points.
+_UNIT_PLANS: dict[Provider, str] = {"codex": "plus", "claude": "pro"}
+_PLAN_CAPACITIES: dict[Provider, dict[str, int]] = {
+    "codex": {"plus": 1, "pro-5x": 5, "pro-20x": 20},
+    "claude": {
+        "pro": 1,
+        "max-5x": 5,
+        "max-20x": 20,
+        # TODO: remove once production Keeper includes cpa-usage-keeper's
+        # Max 5x/20x distinction; until then Keeper reports every Max
+        # account as plain "max", and ours are all 20x.
+        "max": 20,
+    },
+}
 
 
 async def load_forecasts(
@@ -197,21 +209,12 @@ def _capacities(
     provider: Provider, accounts: Sequence[AccountQuota]
 ) -> tuple[str, dict[str, int]] | None:
     """Return the unit plan and each account's weekly capacity in unit plans."""
-    if provider == "codex":
-        if any(account.plan not in _CODEX_PLAN_CAPACITIES for account in accounts):
-            return None
-        return _CODEX_UNIT_PLAN, {
-            account.credential_id: _CODEX_PLAN_CAPACITIES[account.plan or ""]
-            for account in accounts
-        }
-    # Keeper reports Claude Max without its 5x/20x multiplier, so accounts can
-    # only be pooled when they share one plan.
-    plans = {account.plan for account in accounts}
-    if len(plans) != 1 or None in plans:
+    capacities = _PLAN_CAPACITIES[provider]
+    if any(account.plan not in capacities for account in accounts):
         return None
-    (plan,) = plans
-    assert plan is not None
-    return plan, {account.credential_id: 1 for account in accounts}
+    return _UNIT_PLANS[provider], {
+        account.credential_id: capacities[account.plan or ""] for account in accounts
+    }
 
 
 def _pool_snapshot(  # noqa: PLR0913
