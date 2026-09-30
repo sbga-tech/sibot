@@ -42,9 +42,9 @@ _PLAN_CAPACITIES: dict[Provider, dict[str, int]] = {
         "pro": 1,
         "max-5x": 5,
         "max-20x": 20,
-        # TODO: remove once production Keeper includes cpa-usage-keeper's
-        # Max 5x/20x distinction; until then Keeper reports every Max
-        # account as plain "max", and ours are all 20x.
+        # Keeper falls back to plain "max" when Anthropic's profile has no
+        # recognizable rate_limit_tier; count it as the tier our Max accounts
+        # use rather than dropping the whole pool.
         "max": 20,
     },
 }
