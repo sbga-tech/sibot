@@ -52,6 +52,12 @@ class RankingMetrics(PortalModel):
     peak_rpm: int
 
 
+class RankingModel(PortalModel):
+    model: str
+    total_tokens: int
+    share_percent: float
+
+
 class RankingEntry(PortalModel):
     rank: int
     user: RankingUser
@@ -59,6 +65,7 @@ class RankingEntry(PortalModel):
     rate_numerator: int | None = None
     rate_denominator: int | None = None
     metrics: RankingMetrics | None = None
+    models: list[RankingModel] = Field(default_factory=list)
 
 
 class RankingResponse(PortalModel):
@@ -67,6 +74,8 @@ class RankingResponse(PortalModel):
     metric: str
     generated_at: datetime
     stale: bool
+    matcher: str | None = None
+    matched_models: list[str] = Field(default_factory=list)
     entries: list[RankingEntry]
 
 
@@ -178,6 +187,7 @@ class QuotaCredentialsResponse(PortalModel):
 class QuotaSnapshot(QuotaCredentialsResponse):
     generated_at: datetime
     keeper: KeeperQuotaPayload
+    token_estimates: dict[str, float] = Field(default_factory=dict)
 
 
 class ResetCredit(PortalModel):
@@ -233,6 +243,7 @@ class AccountQuota:
     http_status_code: int | None
     plan: str | None
     weekly: WindowQuota | None
+    tokens_per_percent: float | None = None
     five_hour: WindowQuota | None = None
     models: tuple[ModelWindowQuota, ...] = ()
     extra_usage_percent: float | None = None
@@ -284,7 +295,7 @@ class QuotaHistoryResponse(PortalModel):
 
 @dataclass(frozen=True, slots=True)
 class ForecastScenario:
-    lookback_hours: int
+    rate_windows: tuple[int, ...]
     burn_points_per_hour: float
     runway_hours: float | None
     reaches_reset: bool | None
@@ -314,5 +325,6 @@ class PoolForecast:
     available_points: float | None = None
     next_reset_at: datetime | None = None
     observed_at: datetime | None = None
+    estimated_tokens: float | None = None
     scenario: ForecastScenario | None = None
     warnings: tuple[ForecastWarning, ...] = ()

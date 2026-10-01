@@ -11,7 +11,8 @@ _PERIODS: dict[str, RankingPeriod] = {
     "month": "current_month",
     "last-month": "previous_month",
 }
-_RANK_WITH_PERIOD_ARGUMENTS = 2
+_RANK_MIN_ARGUMENTS = 2
+_RANK_MAX_ARGUMENTS = 3
 
 
 class CommandUsageError(ValueError):
@@ -22,6 +23,7 @@ class CommandUsageError(ValueError):
 class AICommand:
     action: Literal["help", "rank", "quota", "reset"]
     period: RankingPeriod | None = None
+    matcher: str | None = None
 
 
 def parse_ai_command(argument: str) -> AICommand:
@@ -38,6 +40,17 @@ def parse_ai_command(argument: str) -> AICommand:
     if action == "rank":
         if len(tokens) == 1:
             return AICommand(action="rank", period="today")
-        if len(tokens) == _RANK_WITH_PERIOD_ARGUMENTS and tokens[1].lower() in _PERIODS:
-            return AICommand(action="rank", period=_PERIODS[tokens[1].lower()])
+        if not _RANK_MIN_ARGUMENTS <= len(tokens) <= _RANK_MAX_ARGUMENTS:
+            raise CommandUsageError
+        arguments = tokens[1:]
+        period_tokens = [token for token in arguments if token.lower() in _PERIODS]
+        if len(period_tokens) > 1:
+            raise CommandUsageError
+        period = _PERIODS[period_tokens[0].lower()] if period_tokens else "today"
+        matchers = [token for token in arguments if token.lower() not in _PERIODS]
+        if len(matchers) > 1:
+            raise CommandUsageError
+        return AICommand(
+            action="rank", period=period, matcher=matchers[0] if matchers else None
+        )
     raise CommandUsageError

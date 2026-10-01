@@ -379,6 +379,15 @@ def render_ranking(
     if ranking.stale:
         subtitle += " · 可能已过期"
     _header(canvas, f"Token 排名 · {PERIOD_LABELS[ranking.period]}", subtitle)
+    if ranking.matcher and ranking.matched_models:
+        matched = "、".join(ranking.matched_models)
+        canvas.text(
+            _PAD,
+            _truncate(
+                _Text(f"匹配：{matched}", size=10, color=_MUTED), _WIDTH - 2 * _PAD
+            ),
+        )
+        canvas.y += canvas.line_height(10) + _GAP // 2
     if not ranking.entries:
         canvas.text(_PAD, _Text("暂无数据", color=_MUTED))
         canvas.y += canvas.line_height(13)
@@ -431,7 +440,20 @@ def _ranking_row(
     else:
         canvas.y = row_top + (_AVATAR_SIZE - canvas.line_height(13)) // 2
         canvas.text(text_x, _truncate(_Text(login, size=13, bold=True), name_width))
-    canvas.y = row_top + _AVATAR_SIZE + _GAP
+
+    if entry.models:
+        model_text = " · ".join(
+            f"{model.model} {model.share_percent:.0f}%" for model in entry.models
+        )
+        canvas.y = row_top + _AVATAR_SIZE - _GAP // 3
+        canvas.text(
+            text_x,
+            _truncate(_Text(model_text, size=9, color=_MUTED), _WIDTH - _PAD - text_x),
+        )
+        canvas.y += canvas.line_height(9)
+    else:
+        canvas.y = row_top + _AVATAR_SIZE
+    canvas.y += _GAP
 
 
 def _avatar(image: Image.Image | None, login: str) -> Image.Image:

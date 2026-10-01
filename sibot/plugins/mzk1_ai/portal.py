@@ -96,12 +96,13 @@ class PortalClient:
             await self._client.aclose()
             self._client = None
 
-    async def ranking(self, period: RankingPeriod) -> RankingResponse:
-        return await self._get_model(
-            "ranking",
-            RankingResponse,
-            params={"period": period, "metric": "total_tokens"},
-        )
+    async def ranking(
+        self, period: RankingPeriod, matcher: str | None = None
+    ) -> RankingResponse:
+        params = {"period": period, "metric": "total_tokens"}
+        if matcher is not None:
+            params["matcher"] = matcher
+        return await self._get_model("ranking", RankingResponse, params=params)
 
     async def quota(self) -> QuotaSnapshot:
         return await self._get_model("quota", QuotaSnapshot)

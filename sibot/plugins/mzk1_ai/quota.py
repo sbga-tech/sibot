@@ -40,7 +40,10 @@ def extract_accounts(snapshot: QuotaSnapshot) -> list[AccountQuota]:
     cache_by_id = {item.auth_index: item for item in snapshot.keeper.quota_cache.items}
     return [
         _extract_account(
-            provider, credential, cache_by_id.get(credential.credential_id)
+            provider,
+            credential,
+            cache_by_id.get(credential.credential_id),
+            snapshot.token_estimates.get(credential.credential_id),
         )
         for credential in snapshot.credentials
         if (provider := credential_provider(credential)) is not None
@@ -65,17 +68,36 @@ def _extract_account(
     provider: Provider,
     credential: QuotaCredential,
     item: CachedQuotaItem | None,
+    tokens_per_percent: float | None,
 ) -> AccountQuota:
     if item is None:
-        return _account(provider, credential, status="missing")
-
+        return _account(
+            provider,
+            credential,
+            status="missing",
+            tokens_per_percent=tokens_per_percent,
+        )
     plan = (
         item.quota.subscription.plan if item.quota and item.quota.subscription else None
     )
     if item.status == "failed":
-        return _account(provider, credential, status="failed", item=item, plan=plan)
+        return _account(
+            provider,
+            credential,
+            status="failed",
+            item=item,
+            plan=plan,
+            tokens_per_percent=tokens_per_percent,
+        )
     if item.quota is None or item.refreshed_at is None:
-        return _account(provider, credential, status="invalid", item=item, plan=plan)
+        return _account(
+            provider,
+            credential,
+            status="invalid",
+            item=item,
+            plan=plan,
+            tokens_per_percent=tokens_per_percent,
+        )
 
     rows = item.quota.quota
     if provider == "codex":
@@ -116,7 +138,14 @@ def _extract_account(
         # Anthropic omits resets_at until a window is first used; such an
         # account is idle, not broken. It still has no usable weekly window.
         status = "unstarted" if _is_unstarted(rows, provider) else "invalid"
-        return _account(provider, credential, status=status, item=item, plan=plan)
+        return _account(
+            provider,
+            credential,
+            status=status,
+            item=item,
+            plan=plan,
+            tokens_per_percent=tokens_per_percent,
+        )
     return _account(
         provider,
         credential,
@@ -127,6 +156,7 @@ def _extract_account(
         five_hour=five_hour,
         models=models,
         extra_usage_percent=extra_usage,
+        tokens_per_percent=tokens_per_percent,
     )
 
 
@@ -199,6 +229,7 @@ def _account(  # noqa: PLR0913
     five_hour: WindowQuota | None = None,
     models: tuple[ModelWindowQuota, ...] = (),
     extra_usage_percent: float | None = None,
+    tokens_per_percent: float | None = None,
 ) -> AccountQuota:
     return AccountQuota(
         provider=provider,
@@ -209,6 +240,7 @@ def _account(  # noqa: PLR0913
         http_status_code=item.http_status_code if item else None,
         plan=plan,
         weekly=weekly,
+        tokens_per_percent=tokens_per_percent,
         five_hour=five_hour,
         models=models,
         extra_usage_percent=extra_usage_percent,

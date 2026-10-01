@@ -18,6 +18,8 @@ from .quota import is_login_invalid
 DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _HOURS_PER_DAY = 24
 _SHORT_RUNWAY_HOURS = 48
+_THOUSAND = 1_000
+_MILLION = 1_000_000
 PROVIDER_LABELS: dict[Provider, str] = {"codex": "Codex", "claude": "Claude"}
 _UPSTREAM_NAMES: dict[Provider, str] = {"codex": "OpenAI", "claude": "Anthropic"}
 PERIOD_LABELS = {
@@ -41,7 +43,7 @@ def format_help() -> str:
     return "\n".join(
         (
             "可用指令：",
-            "/ai rank [today|yesterday|month|last-month]",
+            "/ai rank [matcher] [today|yesterday|month|last-month]",
             "/ai quota",
             "/ai reset",
         )
@@ -144,10 +146,12 @@ def forecast_lines(forecast: PoolForecast) -> list[str]:
         if forecast.unit_plan is not None:
             remaining += f"（{forecast.unit_plan}=100%）"
         lines.append(remaining)
+    if forecast.estimated_tokens is not None:
+        lines.append(f"约剩 {_format_tokens(forecast.estimated_tokens)} tokens")
     if forecast.next_reset_at is not None:
         lines.append(f"最早重置 {format_short_time(forecast.next_reset_at)}")
     if forecast.problem is not None:
-        if forecast.problem != "unstarted_window":
+        if forecast.problem not in {"unstarted_window", "missing_history"}:
             lines.append(_FORECAST_PROBLEMS[forecast.problem])
     elif forecast.scenario is not None:
         lines.append(_format_scenario(forecast.scenario, forecast))
@@ -157,11 +161,11 @@ def forecast_lines(forecast: PoolForecast) -> list[str]:
 
 
 def _format_scenario(scenario: ForecastScenario, forecast: PoolForecast) -> str:
-    rate = f"近{scenario.lookback_hours}h {scenario.burn_points_per_hour:.1f}%/h"
+    rate = f"当前 {scenario.burn_points_per_hour:.1f}%/h"
     if scenario.runway_hours is None:
-        return f"{rate}，暂无耗尽估计"
+        return rate
     if scenario.runway_hours <= 0:
-        return f"{rate}，可用额度已见底"
+        return f"{rate}，额度已见底"
     if scenario.reaches_reset:
         return f"{rate}，能撑到重置"
     exhaustion = forecast.generated_at + timedelta(hours=scenario.runway_hours)
@@ -169,6 +173,14 @@ def _format_scenario(scenario: ForecastScenario, forecast: PoolForecast) -> str:
         f"{rate}，约{_format_duration(scenario.runway_hours)}后"
         f"（{format_time(exhaustion)}）耗尽"
     )
+
+
+def _format_tokens(value: float) -> str:
+    if value < _THOUSAND:
+        return f"{value:.0f}"
+    if value < _MILLION:
+        return f"{value / _THOUSAND:.1f}K"
+    return f"{value / _MILLION:.1f}M"
 
 
 def _format_duration(hours: float) -> str:
