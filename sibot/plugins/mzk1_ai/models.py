@@ -20,6 +20,8 @@ RankingPeriod: TypeAlias = Literal[
     "current_month",
     "previous_month",
 ]
+# `value` units: tokens for total_tokens, micro-USD for cost.
+RankingMetric: TypeAlias = Literal["total_tokens", "cost"]
 Provider: TypeAlias = Literal["codex", "claude"]
 PROVIDERS: tuple[Provider, ...] = ("codex", "claude")
 # "unstarted": the provider has not opened the weekly window yet (no reset time).
@@ -54,8 +56,7 @@ class RankingMetrics(PortalModel):
 
 class RankingModel(PortalModel):
     model: str
-    total_tokens: int
-    share_percent: float
+    value: int
 
 
 class RankingEntry(PortalModel):
@@ -71,11 +72,10 @@ class RankingEntry(PortalModel):
 class RankingResponse(PortalModel):
     period: RankingPeriod
     period_key: str
-    metric: str
+    metric: RankingMetric
     generated_at: datetime
     stale: bool
     matcher: str | None = None
-    matched_models: list[str] = Field(default_factory=list)
     entries: list[RankingEntry]
 
 

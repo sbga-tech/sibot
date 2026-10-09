@@ -12,6 +12,7 @@ from .models import (
     ForecastScenario,
     PoolForecast,
     Provider,
+    RankingMetric,
 )
 from .quota import is_login_invalid
 
@@ -28,6 +29,13 @@ PERIOD_LABELS = {
     "current_month": "本月",
     "previous_month": "上月",
 }
+RANKING_TITLES: dict[RankingMetric, str] = {
+    "total_tokens": "Token 排名",
+    "cost": "Cost 排名",
+}
+OTHER_MODELS_LABEL = "其他"
+USER_SHARE_TITLE = "用户占比"
+MODEL_SHARE_TITLE = "模型占比"
 _FORECAST_PROBLEMS = {
     "no_accounts": "暂无账号",
     "missing_quota": "额度数据不完整",
@@ -43,11 +51,34 @@ def format_help() -> str:
     return "\n".join(
         (
             "可用指令：",
-            "/ai rank [matcher] [today|yesterday|month|last-month]",
+            "/ai rank [matcher] [today|yesterday|month|last-month] [tokens|cost]",
             "/ai quota",
             "/ai reset",
         )
     )
+
+
+def format_ranking_value(metric: RankingMetric, value: int) -> str:
+    """`value` is tokens, or micro-USD for cost."""
+    if metric == "cost":
+        return f"${value / _MILLION:,.2f}"
+    return f"{value:,}"
+
+
+def format_user_count(user_count: int) -> str:
+    return f"{user_count} 人"
+
+
+def format_other_users(user_count: int) -> str:
+    return f"其余 {user_count} 人"
+
+
+def format_share(share: float) -> str:
+    """Share of a whole in [0, 1]; tiny non-zero shares stay visible as `<1%`."""
+    percent = share * 100
+    if 0 < percent < 1:
+        return "<1%"
+    return f"{percent:.0f}%"
 
 
 def account_status(account: AccountQuota) -> str | None:

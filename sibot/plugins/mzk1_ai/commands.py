@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from .models import RankingPeriod
+from .models import RankingMetric, RankingPeriod
 
 _PERIODS: dict[str, RankingPeriod] = {
     "today": "today",
@@ -11,8 +11,9 @@ _PERIODS: dict[str, RankingPeriod] = {
     "month": "current_month",
     "last-month": "previous_month",
 }
+_METRICS: dict[str, RankingMetric] = {"tokens": "total_tokens", "cost": "cost"}
 _RANK_MIN_ARGUMENTS = 2
-_RANK_MAX_ARGUMENTS = 3
+_RANK_MAX_ARGUMENTS = 4
 
 
 class CommandUsageError(ValueError):
@@ -23,6 +24,7 @@ class CommandUsageError(ValueError):
 class AICommand:
     action: Literal["help", "rank", "quota", "reset"]
     period: RankingPeriod | None = None
+    metric: RankingMetric = "total_tokens"
     matcher: str | None = None
 
 
@@ -44,13 +46,20 @@ def parse_ai_command(argument: str) -> AICommand:
             raise CommandUsageError
         arguments = tokens[1:]
         period_tokens = [token for token in arguments if token.lower() in _PERIODS]
-        if len(period_tokens) > 1:
-            raise CommandUsageError
-        period = _PERIODS[period_tokens[0].lower()] if period_tokens else "today"
-        matchers = [token for token in arguments if token.lower() not in _PERIODS]
-        if len(matchers) > 1:
+        metric_tokens = [token for token in arguments if token.lower() in _METRICS]
+        matchers = [
+            token
+            for token in arguments
+            if token.lower() not in _PERIODS and token.lower() not in _METRICS
+        ]
+        if len(period_tokens) > 1 or len(metric_tokens) > 1 or len(matchers) > 1:
             raise CommandUsageError
         return AICommand(
-            action="rank", period=period, matcher=matchers[0] if matchers else None
+            action="rank",
+            period=_PERIODS[period_tokens[0].lower()] if period_tokens else "today",
+            metric=_METRICS[metric_tokens[0].lower()]
+            if metric_tokens
+            else "total_tokens",
+            matcher=matchers[0] if matchers else None,
         )
     raise CommandUsageError

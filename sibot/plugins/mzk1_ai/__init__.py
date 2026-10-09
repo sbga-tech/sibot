@@ -37,8 +37,8 @@ import nonebot_plugin_localstore as localstore
 
 __plugin_meta__ = PluginMetadata(
     name="Mzk1 AI",
-    description="CPA Token 排名、Codex/Claude 额度提醒、续航和重置机会查询。",
-    usage="/ai rank [matcher] [period], /ai quota, /ai reset",
+    description="CPA Token/Cost 排名、Codex/Claude 额度提醒、续航和重置机会查询。",
+    usage="/ai rank [matcher] [period] [tokens|cost], /ai quota, /ai reset",
     type="application",
     config=Config,
     supported_adapters={"~onebot.v11"},
@@ -157,7 +157,9 @@ async def _execute_command(command: AICommand) -> MessageSegment:
 
 async def _load_command_message(command: AICommand) -> MessageSegment:
     if command.action == "rank" and command.period is not None:
-        response = await portal_client.ranking(command.period, command.matcher)
+        response = await portal_client.ranking(
+            command.period, command.metric, command.matcher
+        )
         avatars = await avatar_cache.load(
             [entry.user.avatar_url for entry in response.entries]
         )

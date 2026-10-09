@@ -13,6 +13,7 @@ from .models import (
     QuotaHistoryResponse,
     QuotaRoutingSnapshot,
     QuotaSnapshot,
+    RankingMetric,
     RankingPeriod,
     RankingResponse,
     ResetCreditsResponse,
@@ -97,9 +98,12 @@ class PortalClient:
             self._client = None
 
     async def ranking(
-        self, period: RankingPeriod, matcher: str | None = None
+        self,
+        period: RankingPeriod,
+        metric: RankingMetric,
+        matcher: str | None = None,
     ) -> RankingResponse:
-        params = {"period": period, "metric": "total_tokens"}
+        params = {"period": period, "metric": metric}
         if matcher is not None:
             params["matcher"] = matcher
         return await self._get_model("ranking", RankingResponse, params=params)
