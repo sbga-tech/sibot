@@ -28,7 +28,7 @@ from .monitor import QuotaMonitor
 from .portal import PortalClient, PortalError
 from .quota import extract_accounts
 from .render import render_quota, render_ranking, render_reset_credits
-from .reset import load_reset_credits
+from .reset import load_reset_overview
 from .scope import is_target_group
 from .storage import StateStore
 
@@ -181,10 +181,10 @@ async def _load_command_message(command: AICommand) -> MessageSegment:
             )
         )
     if command.action == "reset":
-        accounts = await load_reset_credits(portal_client)
+        overview = await load_reset_overview(portal_client)
         return MessageSegment.image(
             await asyncio.to_thread(
-                render_reset_credits, accounts, datetime.now(timezone.utc)
+                render_reset_credits, overview, datetime.now(timezone.utc)
             )
         )
     return MessageSegment.text(format_help())

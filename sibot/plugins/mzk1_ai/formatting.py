@@ -4,10 +4,11 @@ from collections import Counter
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .alerts import AlertEvent
+from .alerts import AlertEvent, ResetGrantChange
 from .models import (
     PROVIDERS,
     AccountQuota,
+    ClaudeResetGrant,
     CodexAccountResetCredits,
     ForecastScenario,
     PoolForecast,
@@ -45,6 +46,15 @@ _FORECAST_PROBLEMS = {
     "unstarted_window": "暂无重置时间",
     "missing_history": "历史数据不足",
 }
+# Quota windows a Claude reset grant clears, in display order.
+_GRANT_CLEARS = {"five_hour": "5h", "seven_day": "周"}
+RESET_QUERY_FAILED = "查询失败"
+NO_RESET_DATA = "暂无数据"
+NO_RESET_GRANTS = "暂无重置机会"
+
+
+def format_missing_grant_accounts(count: int) -> str:
+    return f"{count} 个账号暂无数据"
 
 
 def format_help() -> str:
@@ -96,7 +106,7 @@ def reset_credit_lines(account: CodexAccountResetCredits) -> tuple[str, list[str
     """Headline status and expiry detail lines for one account's reset credits."""
     response = account.response
     if response is None:
-        return "查询失败", []
+        return RESET_QUERY_FAILED, []
 
     count = response.available_count
     status = "可用次数未知" if count is None else f"可用 {count} 次"
@@ -119,6 +129,32 @@ def reset_credit_lines(account: CodexAccountResetCredits) -> tuple[str, list[str
     elif known_count < len(available) or (count is not None and known_count < count):
         details.append("部分过期时间未知")
     return status, details
+
+
+def reset_grant_status(grant: ClaudeResetGrant, now: datetime) -> tuple[str, bool]:
+    """Per-account state of one Claude grant, and whether it still holds resets."""
+    if grant.ends_at is not None and grant.ends_at <= now:
+        return "已过期", False
+    if grant.resets_left == 0:
+        return "已用完", False
+    return f"剩 {grant.resets_left}/{grant.resets_total}", not grant.paused
+
+
+def reset_grant_details(grant: ClaudeResetGrant, now: datetime) -> str:
+    """Expiry and usage conditions shared by every account holding the grant."""
+    parts: list[str] = []
+    if grant.ends_at is not None:
+        parts.append(f"{format_short_time(grant.ends_at)} 到期")
+    windows = [label for key, label in _GRANT_CLEARS.items() if key in grant.clears]
+    if windows:
+        parts.append(f"清空 {'/'.join(windows)}额度")
+    if grant.starts_at is not None and grant.starts_at > now:
+        parts.append(f"{format_short_time(grant.starts_at)} 起可用")
+    if grant.use_requires_limit:
+        parts.append("额度用完后可用")
+    if grant.paused:
+        parts.append("已暂停")
+    return " · ".join(parts)
 
 
 def format_alert_batch(events: list[AlertEvent]) -> str:
@@ -149,7 +185,7 @@ def _format_alert(event: AlertEvent) -> str:
         if event.source == "scheduled":
             action = "周额度已正常重置"
         elif event.source == "reset_credit":
-            action = "已使用重置机会"
+            action = f"已使用重置机会{_grant_suffix(event.grants, with_expiry=False)}"
         else:
             action = f"{_UPSTREAM_NAMES[event.provider]}已重置周额度"
         return (
@@ -159,10 +195,23 @@ def _format_alert(event: AlertEvent) -> str:
         )
     if event.kind == "reset_credit_increased":
         return (
-            f"{event.display_name}：新增{event.added_count}次重置机会，"
+            f"{event.display_name}：新增{event.added_count}次重置机会"
+            f"{_grant_suffix(event.grants, with_expiry=True)}，"
             f"当前可用{event.available_count}次"
         )
     return f"{event.display_name}：登录已失效"
+
+
+def _grant_suffix(changes: tuple[ResetGrantChange, ...], *, with_expiry: bool) -> str:
+    if not changes:
+        return ""
+    texts = [
+        f"{change.label}，{format_time(change.ends_at)}到期"
+        if with_expiry and change.ends_at is not None
+        else change.label
+        for change in changes
+    ]
+    return f"（{'；'.join(texts)}）"
 
 
 def forecast_lines(forecast: PoolForecast) -> list[str]:

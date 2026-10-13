@@ -36,6 +36,8 @@ class CredentialAlertState(StateModel):
     last_refreshed_at: datetime | None = None
     weekly: WeeklyAlertState | None = None
     reset_credits_available: int | None = None
+    # Claude resets left per grant ID; None until grant data is first observed.
+    reset_grants_left: dict[str, int] | None = None
     subscription: SubscriptionAlertState | None = None
 
 

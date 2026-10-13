@@ -147,6 +147,28 @@ class SubscriptionInfo(PortalModel):
     tier_name: str | None = Field(default=None, alias="tierName")
 
 
+class ClaudeResetGrant(PortalModel):
+    """One Anthropic usage-limit reset benefit, as Keeper caches it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grant_id: str = Field(alias="id")
+    label: str = ""
+    resets_total: int = Field(alias="resetsTotal", ge=0, strict=True)
+    resets_left: int = Field(alias="resetsLeft", ge=0, strict=True)
+    starts_at: AwareDatetime | None = Field(default=None, alias="startsAt")
+    ends_at: AwareDatetime | None = Field(default=None, alias="endsAt")
+    clears: tuple[str, ...] = ()
+    paused: bool = False
+    use_requires_limit: bool = Field(default=False, alias="useRequiresLimit")
+
+
+class ClaudeResetGrants(PortalModel):
+    # Sum of resets left over every grant, usable now or not.
+    available_count: int = Field(alias="availableCount", ge=0, strict=True)
+    grants: tuple[ClaudeResetGrant, ...]
+
+
 class QuotaCheckResponse(PortalModel):
     id: str
     quota: list[QuotaRow]
@@ -155,6 +177,21 @@ class QuotaCheckResponse(PortalModel):
         default=None,
         alias="rateLimitResetCreditsAvailableCount",
     )
+    claude_reset_grants: ClaudeResetGrants | None = Field(
+        default=None,
+        alias="claudeResetGrants",
+    )
+
+    @field_validator("claude_reset_grants", mode="wrap")
+    @classmethod
+    def _parse_claude_reset_grants(
+        cls, value: object, handler: ValidatorFunctionWrapHandler
+    ) -> ClaudeResetGrants | None:
+        # Optional benefit data must not hide the account's quota windows.
+        try:
+            return handler(value)
+        except ValidationError:
+            return None
 
 
 class CachedQuotaItem(PortalModel):
@@ -248,7 +285,16 @@ class AccountQuota:
     models: tuple[ModelWindowQuota, ...] = ()
     extra_usage_percent: float | None = None
     reset_credits_available: int | None = None
+    # None when Keeper has no grant data for the account (always for Codex).
+    claude_reset_grants: tuple[ClaudeResetGrant, ...] | None = None
     subscription_active_until: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResetOverview:
+    # None when that provider's part of the query failed.
+    codex: tuple[CodexAccountResetCredits, ...] | None
+    claude: tuple[AccountQuota, ...] | None
 
 
 class QuotaRoutingCredential(PortalModel):

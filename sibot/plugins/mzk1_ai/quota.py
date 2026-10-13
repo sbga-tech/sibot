@@ -231,6 +231,12 @@ def _account(  # noqa: PLR0913
     extra_usage_percent: float | None = None,
     tokens_per_percent: float | None = None,
 ) -> AccountQuota:
+    quota = item.quota if item else None
+    reset_credits = quota.reset_credits_available if quota else None
+    grants = quota.claude_reset_grants if quota and provider == "claude" else None
+    if grants is not None:
+        # Claude's reset grants play the role of Codex reset credits.
+        reset_credits = grants.available_count
     return AccountQuota(
         provider=provider,
         credential_id=credential.credential_id,
@@ -244,8 +250,7 @@ def _account(  # noqa: PLR0913
         five_hour=five_hour,
         models=models,
         extra_usage_percent=extra_usage_percent,
-        reset_credits_available=(
-            item.quota.reset_credits_available if item and item.quota else None
-        ),
+        reset_credits_available=reset_credits,
+        claude_reset_grants=grants.grants if grants is not None else None,
         subscription_active_until=credential.subscription_active_until,
     )

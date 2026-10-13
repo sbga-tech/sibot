@@ -14,13 +14,17 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .formatting import (
     MODEL_SHARE_TITLE,
+    NO_RESET_DATA,
+    NO_RESET_GRANTS,
     OTHER_MODELS_LABEL,
     PERIOD_LABELS,
     PROVIDER_LABELS,
     RANKING_TITLES,
+    RESET_QUERY_FAILED,
     USER_SHARE_TITLE,
     account_status,
     forecast_lines,
+    format_missing_grant_accounts,
     format_other_users,
     format_percent,
     format_ranking_value,
@@ -28,10 +32,13 @@ from .formatting import (
     format_short_time,
     format_user_count,
     reset_credit_lines,
+    reset_grant_details,
+    reset_grant_status,
 )
 from .models import (
     PROVIDERS,
     AccountQuota,
+    ClaudeResetGrant,
     CodexAccountResetCredits,
     PoolForecast,
     Provider,
@@ -39,6 +46,7 @@ from .models import (
     RankingMetric,
     RankingModel,
     RankingResponse,
+    ResetOverview,
     WindowQuota,
 )
 
@@ -341,25 +349,47 @@ def _truncate(item: _Text, width: int) -> _Text:
 # ---------------------------------------------------------------- reset
 
 
-def render_reset_credits(
-    accounts: Sequence[CodexAccountResetCredits], generated_at: datetime
-) -> bytes:
+def render_reset_credits(overview: ResetOverview, generated_at: datetime) -> bytes:
     canvas = _Canvas()
-    _header(canvas, "Codex 重置机会", format_short_time(generated_at))
-    if not accounts:
+    _header(canvas, "重置机会", format_short_time(generated_at))
+    if overview.codex != ():
+        _codex_reset_section(canvas, overview.codex)
+    if overview.claude != ():
+        _claude_reset_section(canvas, overview.claude, generated_at)
+    if overview.codex == () and overview.claude == ():
         canvas.text(_PAD, _Text("暂无可用账号", color=_MUTED))
         canvas.y += canvas.line_height(13)
-        return canvas.render()
+    return canvas.render()
 
+
+def _reset_section_title(canvas: _Canvas, provider: Provider) -> None:
+    canvas.y += _GAP
+    canvas.text(
+        _PAD + _GAP,
+        _Text(PROVIDER_LABELS[provider], size=15, bold=True, color=_ACCENT),
+    )
+    canvas.y += canvas.line_height(15)
+
+
+def _reset_separator(canvas: _Canvas) -> None:
+    canvas.y += _GAP // 2
+    canvas.rect((_PAD + _GAP, canvas.y, _WIDTH - _PAD - _GAP, canvas.y + 1), _LINE, 0)
+    canvas.y += _GAP // 2 + 2 * _SCALE
+
+
+def _codex_reset_section(
+    canvas: _Canvas, accounts: Sequence[CodexAccountResetCredits] | None
+) -> None:
     top = canvas.y
     panel = canvas.open_panel()
+    _reset_section_title(canvas, "codex")
     inner = _PAD + _GAP
     right = _WIDTH - _PAD - _GAP
-    for index, account in enumerate(accounts):
-        canvas.y += _GAP // 2
-        if index:
-            canvas.rect((inner, canvas.y, right, canvas.y + 1), _LINE, 0)
-        canvas.y += _GAP // 2 + 2 * _SCALE
+    if accounts is None:
+        canvas.text(inner, _Text(RESET_QUERY_FAILED, size=12, color=_RED))
+        canvas.y += canvas.line_height(12)
+    for account in accounts or ():
+        _reset_separator(canvas)
         status, details = reset_credit_lines(account)
         count = account.response.available_count if account.response else None
         color = _MUTED if count == 0 else _RED if account.response is None else _ACCENT
@@ -379,7 +409,118 @@ def render_reset_credits(
             canvas.y += canvas.line_height(10)
     canvas.y += _GAP
     canvas.close_panel(panel, top)
-    return canvas.render()
+    canvas.y += _GAP
+
+
+def _claude_reset_section(
+    canvas: _Canvas, accounts: Sequence[AccountQuota] | None, now: datetime
+) -> None:
+    top = canvas.y
+    panel = canvas.open_panel()
+    _reset_section_title(canvas, "claude")
+    inner = _PAD + _GAP
+    groups = _grant_groups(accounts or ())
+    notice = _claude_reset_notice(accounts, has_grants=bool(groups))
+    if notice is not None:
+        canvas.text(inner, notice)
+        canvas.y += canvas.line_height(12)
+    for grant, holders in groups:
+        _reset_separator(canvas)
+        _grant_block(canvas, grant, holders, now)
+    if accounts is not None and groups:
+        missing = sum(account.claude_reset_grants is None for account in accounts)
+        if missing:
+            _reset_separator(canvas)
+            canvas.text(
+                inner,
+                _Text(format_missing_grant_accounts(missing), size=10, color=_MUTED),
+            )
+            canvas.y += canvas.line_height(10)
+    canvas.y += _GAP
+    canvas.close_panel(panel, top)
+    canvas.y += _GAP
+
+
+def _claude_reset_notice(
+    accounts: Sequence[AccountQuota] | None, *, has_grants: bool
+) -> _Text | None:
+    if accounts is None:
+        return _Text(RESET_QUERY_FAILED, size=12, color=_RED)
+    if has_grants:
+        return None
+    if all(account.claude_reset_grants is None for account in accounts):
+        return _Text(NO_RESET_DATA, size=12, color=_MUTED)
+    return _Text(NO_RESET_GRANTS, size=12, color=_MUTED)
+
+
+def _grant_block(
+    canvas: _Canvas,
+    grant: ClaudeResetGrant,
+    holders: Sequence[tuple[str, ClaudeResetGrant]],
+    now: datetime,
+) -> None:
+    inner = _PAD + _GAP
+    right = _WIDTH - _PAD - _GAP
+    title = _Text(grant.label or grant.grant_id, size=12, bold=True)
+    for line in _wrap(title, right - inner):
+        canvas.text(inner, line)
+        canvas.y += canvas.line_height(12)
+    details = reset_grant_details(grant, now)
+    if details:
+        for line in _wrap(_Text(details, size=10, color=_MUTED), right - inner):
+            canvas.text(inner, line)
+            canvas.y += canvas.line_height(10)
+    canvas.y += 2 * _SCALE
+    for display_name, held in holders:
+        text, available = reset_grant_status(held, now)
+        status = _Text(
+            text,
+            size=12,
+            bold=available,
+            color=_ACCENT if available else _MUTED,
+        )
+        status_width = canvas.text(right, status, right=True)
+        canvas.text(
+            inner,
+            _truncate(
+                _Text(display_name, size=12), right - inner - status_width - _GAP
+            ),
+        )
+        canvas.y += canvas.line_height(12)
+
+
+def _grant_groups(
+    accounts: Sequence[AccountQuota],
+) -> list[tuple[ClaudeResetGrant, list[tuple[str, ClaudeResetGrant]]]]:
+    """Group each account's copy of a grant under the grant, soonest expiry first."""
+    holders: dict[str, list[tuple[str, ClaudeResetGrant]]] = {}
+    for account in accounts:
+        for grant in account.claude_reset_grants or ():
+            holders.setdefault(grant.grant_id, []).append((account.display_name, grant))
+    groups = [(members[0][1], members) for members in holders.values()]
+    groups.sort(
+        key=lambda group: (
+            group[0].ends_at is None,
+            group[0].ends_at.timestamp() if group[0].ends_at else 0.0,
+            group[0].grant_id,
+        )
+    )
+    return groups
+
+
+def _wrap(item: _Text, width: int) -> list[_Text]:
+    """Break text at spaces to fit `width`; an overlong word is truncated."""
+    lines: list[str] = []
+    line = ""
+    for word in item.text.split(" "):
+        candidate = f"{line} {word}" if line else word
+        if line and _Canvas.measure(replace(item, text=candidate)) > width:
+            lines.append(line)
+            line = word
+        else:
+            line = candidate
+    lines.append(line)
+    return [_truncate(replace(item, text=text), width) for text in lines]
 
 
 # ---------------------------------------------------------------- rank

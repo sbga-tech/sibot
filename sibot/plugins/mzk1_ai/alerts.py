@@ -1,10 +1,10 @@
 """State transitions for subscription weekly quota and login alerts."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal, TypeAlias
 
-from .models import AccountQuota, Provider, WindowQuota
+from .models import AccountQuota, ClaudeResetGrant, Provider, WindowQuota
 from .quota import is_login_invalid
 from .storage import CredentialAlertState, PersistedState, WeeklyAlertState
 
@@ -18,6 +18,14 @@ _RESTORE_MIN_PERCENT = 25.0
 
 # "upstream" means the provider restored quota before the scheduled reset.
 ResetSource: TypeAlias = Literal["scheduled", "reset_credit", "upstream"]
+
+
+@dataclass(frozen=True, slots=True)
+class ResetGrantChange:
+    """A named Claude grant whose resets rose or fell between observations."""
+
+    label: str
+    ends_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +60,8 @@ class WeeklyResetAlert:
     remaining_percent: float
     reset_at: datetime
     observed_at: datetime
+    # Grants whose resets were consumed, when the source is a reset credit.
+    grants: tuple[ResetGrantChange, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +73,7 @@ class ResetCreditIncreasedAlert:
     added_count: int
     available_count: int
     observed_at: datetime
+    grants: tuple[ResetGrantChange, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +231,8 @@ def _evaluate_successful_account(
         return
     previous_credits = credential.reset_credits_available
     current_credits = account.reset_credits_available
+    previous_grants = credential.reset_grants_left
+    current_grants = account.claude_reset_grants
 
     if account.weekly is not None:
         event = _evaluate_weekly_quota(
@@ -229,6 +242,11 @@ def _evaluate_successful_account(
             previous_credits,
             current_credits,
         )
+        if isinstance(event, WeeklyResetAlert) and event.source == "reset_credit":
+            event = replace(
+                event,
+                grants=_grant_changes(previous_grants, current_grants, gained=False),
+            )
         if event is not None:
             events.append(event)
     credit_event = _reset_credit_increase_event(
@@ -236,11 +254,16 @@ def _evaluate_successful_account(
         observed_at,
         previous_credits,
         current_credits,
+        _grant_changes(previous_grants, current_grants, gained=True),
     )
     if credit_event is not None:
         events.append(credit_event)
     if current_credits is not None:
         credential.reset_credits_available = current_credits
+    if current_grants is not None:
+        credential.reset_grants_left = {
+            grant.grant_id: grant.resets_left for grant in current_grants
+        }
 
 
 def _evaluate_weekly_quota(
@@ -309,6 +332,7 @@ def _reset_credit_increase_event(
     observed_at: datetime,
     previous_credits: int | None,
     current_credits: int | None,
+    grants: tuple[ResetGrantChange, ...],
 ) -> ResetCreditIncreasedAlert | None:
     if (
         previous_credits is None
@@ -324,6 +348,23 @@ def _reset_credit_increase_event(
         added_count=current_credits - previous_credits,
         available_count=current_credits,
         observed_at=observed_at,
+        grants=grants,
+    )
+
+
+def _grant_changes(
+    previous: dict[str, int] | None,
+    current: tuple[ClaudeResetGrant, ...] | None,
+    *,
+    gained: bool,
+) -> tuple[ResetGrantChange, ...]:
+    if previous is None or current is None:
+        return ()
+    return tuple(
+        ResetGrantChange(label=grant.label or grant.grant_id, ends_at=grant.ends_at)
+        for grant in current
+        if (delta := grant.resets_left - previous.get(grant.grant_id, 0))
+        and (delta > 0) == gained
     )
 
 
