@@ -17,7 +17,6 @@ from .formatting import (
     NO_RESET_DATA,
     NO_RESET_GRANTS,
     OTHER_MODELS_LABEL,
-    PERIOD_LABELS,
     PROVIDER_LABELS,
     RANKING_TITLES,
     RESET_QUERY_FAILED,
@@ -27,6 +26,7 @@ from .formatting import (
     format_missing_grant_accounts,
     format_other_users,
     format_percent,
+    format_period,
     format_ranking_value,
     format_share,
     format_short_time,
@@ -544,8 +544,9 @@ _DONUT_SUPERSAMPLE = 4
 _USER_SHARE_AVATAR_SIZE = 14 * _SCALE
 _USER_SHARE_ROW_GAP = 6 * _SCALE
 _USER_SHARE_RANGE = (-0.4, 0.6)
-# Models below this share of the card total are drawn as one "other" slice.
-_MIN_MODEL_SHARE = 0.01
+# A card names its largest models; the rest merge into one "other" slice,
+# which never holds a single model.
+_MODEL_LEGEND_TOP = 8
 _OTHER_COLOR = (203, 213, 225)
 # Warm grey so its light shades stay apart from the cool "other" slice.
 _UNKNOWN_VENDOR_COLOR = (120, 113, 108)
@@ -598,23 +599,21 @@ class _Legend:
 def render_ranking(
     ranking: RankingResponse, avatars: Sequence[Image.Image | None]
 ) -> bytes:
+    """Draw a ranking with at least one entry; empty ones are answered as text."""
     canvas = _Canvas(_RANK_WIDTH)
     subtitle = format_short_time(ranking.generated_at)
-    if ranking.stale:
-        subtitle += " · 可能已过期"
-    title = f"{RANKING_TITLES[ranking.metric]} · {PERIOD_LABELS[ranking.period]}"
+    period = format_period(ranking.period, ranking.start_date, ranking.end_date)
+    title = f"{RANKING_TITLES[ranking.metric]} · {period}"
     if ranking.matcher:
         title += f" · {ranking.matcher}"
     _header(canvas, title, subtitle)
-    if not ranking.entries:
-        canvas.text(_PAD, _Text("暂无数据", color=_MUTED))
-        canvas.y += canvas.line_height(13)
-        return canvas.render()
 
     # Users first; the model legend sits directly above the rows it colours.
     legend = _legend(ranking.entries)
-    _user_share(canvas, ranking, avatars)
-    canvas.y += _GAP
+    # Cache rates do not add up across users, so there is no user share.
+    if ranking.metric != "cache":
+        _user_share(canvas, ranking, avatars)
+        canvas.y += _GAP
     _model_share(canvas, legend)
     canvas.y += _GAP
     top = canvas.y
@@ -632,11 +631,13 @@ def _legend(entries: Sequence[RankingEntry]) -> _Legend:
         for model in entry.models:
             totals[model.model] += model.value
     grand = sum(totals.values())
-    shown = {
-        model: value
-        for model, value in totals.items()
-        if value > 0 and value >= grand * _MIN_MODEL_SHARE
-    }
+    ranked = sorted(
+        (model for model, value in totals.items() if value > 0),
+        key=lambda name: (-totals[name], name),
+    )
+    if len(ranked) > _MODEL_LEGEND_TOP + 1:
+        ranked = ranked[:_MODEL_LEGEND_TOP]
+    shown = {model: totals[model] for model in ranked}
     vendors: dict[_RGB, list[str]] = {}
     for model in sorted(shown, key=lambda name: (-shown[name], name)):
         vendors.setdefault(_vendor_color(model), []).append(model)

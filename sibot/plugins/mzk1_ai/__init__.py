@@ -23,9 +23,9 @@ from .avatars import AvatarCache
 from .commands import AICommand, CommandUsageError, parse_ai_command
 from .config import Config
 from .forecast import load_forecasts
-from .formatting import format_help
+from .formatting import format_help, format_rank_no_data, format_rank_rejected
 from .monitor import QuotaMonitor
-from .portal import PortalClient, PortalError
+from .portal import PortalBadRequestError, PortalClient, PortalError
 from .quota import extract_accounts
 from .render import render_quota, render_ranking, render_reset_credits
 from .reset import load_reset_overview
@@ -37,8 +37,8 @@ import nonebot_plugin_localstore as localstore
 
 __plugin_meta__ = PluginMetadata(
     name="Mzk1 AI",
-    description="CPA Token/Cost 排名、Codex/Claude 额度提醒、续航和重置机会查询。",
-    usage="/ai rank [matcher] [period] [tokens|cost], /ai quota, /ai reset",
+    description="CPA 用量排名、Codex/Claude 额度提醒、续航和重置机会查询。",
+    usage="/ai rank [模型] [时间] [tokens|cost|req|cache], /ai quota, /ai reset",
     type="application",
     config=Config,
     supported_adapters={"~onebot.v11"},
@@ -156,10 +156,18 @@ async def _execute_command(command: AICommand) -> MessageSegment:
 
 
 async def _load_command_message(command: AICommand) -> MessageSegment:
-    if command.action == "rank" and command.period is not None:
-        response = await portal_client.ranking(
-            command.period, command.metric, command.matcher
-        )
+    if command.action == "rank":
+        try:
+            response = await portal_client.ranking(
+                command.period, command.metric, command.matcher
+            )
+        except PortalBadRequestError:
+            # Portal rejects periods past Keeper's lookback and long matchers.
+            return MessageSegment.text(
+                format_rank_rejected(command.matcher, command.period, command.metric)
+            )
+        if not response.entries:
+            return MessageSegment.text(format_rank_no_data(response))
         avatars = await avatar_cache.load(
             [entry.user.avatar_url for entry in response.entries]
         )

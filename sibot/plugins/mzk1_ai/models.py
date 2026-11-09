@@ -1,7 +1,7 @@
 """CPA Portal response and internal quota models."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, TypeAlias
 
 from pydantic import (
@@ -14,14 +14,12 @@ from pydantic import (
     field_validator,
 )
 
-RankingPeriod: TypeAlias = Literal[
-    "today",
-    "yesterday",
-    "current_month",
-    "previous_month",
-]
-# `value` units: tokens for total_tokens, micro-USD for cost.
-RankingMetric: TypeAlias = Literal["total_tokens", "cost"]
+# Portal period syntax: `d`/`w`/`m` (today, this week, this month), `X-N` for
+# the Nth unit before, `NX` for the last N units including the current one.
+RankingPeriod: TypeAlias = str
+# `value` units: tokens, micro-USD for cost, requests for req, and cache-read
+# share of input tokens in parts per million for cache.
+RankingMetric: TypeAlias = Literal["tokens", "cost", "req", "cache"]
 Provider: TypeAlias = Literal["codex", "claude"]
 PROVIDERS: tuple[Provider, ...] = ("codex", "claude")
 # "unstarted": the provider has not opened the weekly window yet (no reset time).
@@ -44,18 +42,9 @@ class RankingUser(PortalModel):
     avatar_url: str
 
 
-class RankingMetrics(PortalModel):
-    total_tokens: int
-    request_count: int
-    cache_read_rate: int
-    ttft_average: int
-    latency_average: int
-    peak_tpm: int
-    peak_rpm: int
-
-
 class RankingModel(PortalModel):
     model: str
+    # The entry's unit, except tokens for the non-additive cache rate.
     value: int
 
 
@@ -63,18 +52,16 @@ class RankingEntry(PortalModel):
     rank: int
     user: RankingUser
     value: int
-    rate_numerator: int | None = None
-    rate_denominator: int | None = None
-    metrics: RankingMetrics | None = None
     models: list[RankingModel] = Field(default_factory=list)
 
 
 class RankingResponse(PortalModel):
     period: RankingPeriod
-    period_key: str
     metric: RankingMetric
+    # Inclusive dates in Keeper's timezone.
+    start_date: date
+    end_date: date
     generated_at: datetime
-    stale: bool
     matcher: str | None = None
     entries: list[RankingEntry]
 

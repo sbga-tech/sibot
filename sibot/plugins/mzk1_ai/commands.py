@@ -1,19 +1,20 @@
 """Pure parser for the small `/ai` command surface."""
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
 from .models import RankingMetric, RankingPeriod
 
-_PERIODS: dict[str, RankingPeriod] = {
-    "today": "today",
-    "yesterday": "yesterday",
-    "month": "current_month",
-    "last-month": "previous_month",
+# Shape of Portal's period syntax; Portal checks the range itself.
+_PERIOD = re.compile(r"[dwm](?:-\d{1,4})?|\d{1,4}[dwm]", re.IGNORECASE)
+_METRICS: dict[str, RankingMetric] = {
+    "tokens": "tokens",
+    "cost": "cost",
+    "req": "req",
+    "cache": "cache",
 }
-_METRICS: dict[str, RankingMetric] = {"tokens": "total_tokens", "cost": "cost"}
-_RANK_MIN_ARGUMENTS = 2
-_RANK_MAX_ARGUMENTS = 4
+_RANK_MAX_ARGUMENTS = 3
 
 
 class CommandUsageError(ValueError):
@@ -23,8 +24,8 @@ class CommandUsageError(ValueError):
 @dataclass(frozen=True, slots=True)
 class AICommand:
     action: Literal["help", "rank", "quota", "reset"]
-    period: RankingPeriod | None = None
-    metric: RankingMetric = "total_tokens"
+    period: RankingPeriod = "d"
+    metric: RankingMetric = "tokens"
     matcher: str | None = None
 
 
@@ -40,26 +41,31 @@ def parse_ai_command(argument: str) -> AICommand:
     if action == "reset" and len(tokens) == 1:
         return AICommand(action="reset")
     if action == "rank":
-        if len(tokens) == 1:
-            return AICommand(action="rank", period="today")
-        if not _RANK_MIN_ARGUMENTS <= len(tokens) <= _RANK_MAX_ARGUMENTS:
-            raise CommandUsageError
-        arguments = tokens[1:]
-        period_tokens = [token for token in arguments if token.lower() in _PERIODS]
-        metric_tokens = [token for token in arguments if token.lower() in _METRICS]
-        matchers = [
-            token
-            for token in arguments
-            if token.lower() not in _PERIODS and token.lower() not in _METRICS
-        ]
-        if len(period_tokens) > 1 or len(metric_tokens) > 1 or len(matchers) > 1:
-            raise CommandUsageError
-        return AICommand(
-            action="rank",
-            period=_PERIODS[period_tokens[0].lower()] if period_tokens else "today",
-            metric=_METRICS[metric_tokens[0].lower()]
-            if metric_tokens
-            else "total_tokens",
-            matcher=matchers[0] if matchers else None,
-        )
+        return _parse_rank(tokens[1:])
     raise CommandUsageError
+
+
+def _parse_rank(arguments: list[str]) -> AICommand:
+    """`/ai rank [model] [period] [metric]` in any order."""
+    if len(arguments) > _RANK_MAX_ARGUMENTS:
+        raise CommandUsageError
+    periods: list[str] = []
+    metrics: list[RankingMetric] = []
+    matchers: list[str] = []
+    for argument in arguments:
+        lowered = argument.lower()
+        metric = _METRICS.get(lowered)
+        if metric is not None:
+            metrics.append(metric)
+        elif _PERIOD.fullmatch(argument):
+            periods.append(lowered)
+        else:
+            matchers.append(argument)
+    if len(periods) > 1 or len(metrics) > 1 or len(matchers) > 1:
+        raise CommandUsageError
+    return AICommand(
+        action="rank",
+        period=periods[0] if periods else "d",
+        metric=metrics[0] if metrics else "tokens",
+        matcher=matchers[0] if matchers else None,
+    )

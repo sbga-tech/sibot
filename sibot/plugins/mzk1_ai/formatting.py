@@ -1,7 +1,7 @@
 """Compact Chinese wording shared by text messages and rendered images."""
 
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .alerts import AlertEvent, ResetGrantChange
@@ -14,6 +14,7 @@ from .models import (
     PoolForecast,
     Provider,
     RankingMetric,
+    RankingResponse,
 )
 from .quota import is_login_invalid
 
@@ -24,15 +25,20 @@ _THOUSAND = 1_000
 _MILLION = 1_000_000
 PROVIDER_LABELS: dict[Provider, str] = {"codex": "Codex", "claude": "Claude"}
 _UPSTREAM_NAMES: dict[Provider, str] = {"codex": "OpenAI", "claude": "Anthropic"}
-PERIOD_LABELS = {
-    "today": "今日",
-    "yesterday": "昨日",
-    "current_month": "本月",
-    "previous_month": "上月",
+_PERIOD_NAMES = {
+    "d": "今日",
+    "d-1": "昨日",
+    "w": "本周",
+    "w-1": "上周",
+    "m": "本月",
+    "m-1": "上月",
 }
+_PERIOD_UNITS = {"d": "天", "w": "周", "m": "个月"}
 RANKING_TITLES: dict[RankingMetric, str] = {
-    "total_tokens": "Token 排名",
+    "tokens": "Token 排名",
     "cost": "Cost 排名",
+    "req": "请求排名",
+    "cache": "缓存命中排名",
 }
 OTHER_MODELS_LABEL = "其他"
 USER_SHARE_TITLE = "用户占比"
@@ -61,17 +67,69 @@ def format_help() -> str:
     return "\n".join(
         (
             "可用指令：",
-            "/ai rank [matcher] [today|yesterday|month|last-month] [tokens|cost]",
+            "/ai rank [模型] [时间] [tokens|cost|req|cache]",
+            "  时间：d 今天，w 本周，m 本月",
+            "  d-1 昨天，m-1 上月，7d 近 7 天，2m 上月和本月",
             "/ai quota",
             "/ai reset",
         )
     )
 
 
+def format_period(period: str, start: date, end: date) -> str:
+    """Named periods by name, `NX` as a count, others by their dates."""
+    if name := _PERIOD_NAMES.get(period):
+        return name
+    unit = period[-1]
+    if period[0].isdigit():
+        return f"近 {period[:-1]} {_PERIOD_UNITS[unit]}"
+    if period.startswith("m"):
+        return f"{start:%Y-%m}"
+    return _format_dates(start, end)
+
+
+def _format_dates(start: date, end: date) -> str:
+    return f"{start:%m-%d}" if start == end else f"{start:%m-%d}~{end:%m-%d}"
+
+
+def format_rank_no_data(ranking: RankingResponse) -> str:
+    """Reply for a ranking with no entries: how the input was read, then help."""
+    period = format_period(ranking.period, ranking.start_date, ranking.end_date)
+    dates = _format_dates(ranking.start_date, ranking.end_date)
+    if period != dates:
+        period += f"（{dates}）"
+    return _rank_problem(
+        "没有匹配的用量数据。", ranking.matcher, period, ranking.metric
+    )
+
+
+def format_rank_rejected(
+    matcher: str | None, period: str, metric: RankingMetric
+) -> str:
+    """Reply for a ranking request Portal refused."""
+    return _rank_problem(
+        "无法查询：时间需在最近 365 天内，模型名不超过 64 字。", matcher, period, metric
+    )
+
+
+def _rank_problem(
+    problem: str, matcher: str | None, period: str, metric: RankingMetric
+) -> str:
+    return "\n".join(
+        (
+            problem,
+            f"解析为：模型 {matcher or '全部'}，时间 {period}，指标 {metric}",
+            format_help(),
+        )
+    )
+
+
 def format_ranking_value(metric: RankingMetric, value: int) -> str:
-    """`value` is tokens, or micro-USD for cost."""
+    """`value` is tokens, micro-USD, requests, or cache-read ppm."""
     if metric == "cost":
         return f"${value / _MILLION:,.2f}"
+    if metric == "cache":
+        return f"{value / 10_000:.1f}%"
     return f"{value:,}"
 
 
