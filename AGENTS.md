@@ -2,7 +2,7 @@
 
 ## Project boundary
 
-- `sibot` is a NoneBot 2 plugin for QQ (through a OneBot V11 client such as NapCat), Discord, and Telegram. It provides the `/ai` command surface in the chats listed in `MZK1_AI_TARGETS` and background notifications to the targets with alerts enabled. `bot.py` registers an adapter only when its connection setting (`ONEBOT_V11_WS_URLS`, `DISCORD_BOTS`, `TELEGRAM_BOTS`) is set.
+- `sibot` is a NoneBot 2 plugin for QQ (through a OneBot V11 client such as NapCat), Discord, and Telegram. It provides the `/ai` command surface in the chats listed in `MZK1_AI_TARGETS` and background notifications to the targets with alerts enabled. `bot.py` registers all three adapters; a platform is enabled by configuring its connection (`ONEBOT_V11_WS_URLS`, `DISCORD_BOTS`, `TELEGRAM_BOTS`). Discord and Telegram also need an HTTP client driver (`DRIVER=~httpx+~websockets`).
 - CPA Portal is the only application API boundary for the Mzk1 AI plugin. Use its authenticated Admin API; do not give the bot Keeper passwords, CPA management keys, or direct access to either upstream service.
 - CPA and Keeper remain responsible for model routing, quota collection, quota history, and usage aggregation. The bot presents those results and must not implement a second quota database or a hidden rate limiter.
 
