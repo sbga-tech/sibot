@@ -39,8 +39,8 @@ _STOP_GRACE_SECONDS = 35
 _BASE_RETRY_SECONDS = 60
 _MAX_RETRY_SECONDS = 60 * 60
 
-SendNotification = Callable[[int, str], Awaitable[None]]
-CheckNotification = Callable[[int, str, datetime], Awaitable[bool]]
+SendNotification = Callable[[PendingNotification], Awaitable[None]]
+CheckNotification = Callable[[PendingNotification, datetime], Awaitable[bool]]
 
 
 class MonitorNotInitializedError(RuntimeError):
@@ -61,7 +61,9 @@ class QuotaMonitor:
     ) -> None:
         self._portal = portal
         self._store = store
-        self._group_id = config.mzk1_ai_group_id
+        self._alert_targets = tuple(
+            target.key for target in config.mzk1_ai_targets if target.alerts
+        )
         self._thresholds = config.mzk1_ai_codex_weekly_alert_thresholds
         self._subscription_alert_hours = config.mzk1_ai_subscription_alert_hours
         self._send_notification = send_notification
@@ -169,7 +171,7 @@ class QuotaMonitor:
         current = [
             item
             for item in state.pending_notifications
-            if item.group_id == self._group_id
+            if item.target in self._alert_targets
         ]
         discarded = len(state.pending_notifications) - len(current)
         if discarded == 0:
@@ -177,7 +179,7 @@ class QuotaMonitor:
         state.pending_notifications = current
         await self._store.save(state)
         logger.warning(
-            "Mzk1 AI discarded {} notification(s) for an old target group",
+            "Mzk1 AI discarded {} notification(s) for removed alert targets",
             discarded,
         )
 
@@ -222,9 +224,7 @@ class QuotaMonitor:
             attempted_at = notification.created_at
         if attempted_at is not None:
             delivered = await asyncio.wait_for(
-                self._check_notification(
-                    notification.group_id, notification.message, attempted_at
-                ),
+                self._check_notification(notification, attempted_at),
                 timeout=_SEND_TIMEOUT_SECONDS,
             )
             if delivered:
@@ -235,7 +235,7 @@ class QuotaMonitor:
         notification.last_attempt_at = datetime.now(timezone.utc)
         await self._store.save(self._require_state())
         await asyncio.wait_for(
-            self._send_notification(notification.group_id, notification.message),
+            self._send_notification(notification),
             timeout=_SEND_TIMEOUT_SECONDS,
         )
 
@@ -294,20 +294,25 @@ class QuotaMonitor:
     def _enqueue_message(
         self, key: str, message: str, *, subscription: PendingSubscription | None = None
     ) -> None:
+        """Queue one copy per alert target; each is delivered on its own."""
         state = self._require_state()
-        if any(item.event_key == key for item in state.pending_notifications):
-            return
         now = datetime.now(timezone.utc)
-        state.pending_notifications.append(
-            PendingNotification(
-                event_key=key,
-                group_id=self._group_id,
-                message=message,
-                created_at=now,
-                next_attempt_at=now,
-                subscription=subscription,
+        for target in self._alert_targets:
+            if any(
+                item.event_key == key and item.target == target
+                for item in state.pending_notifications
+            ):
+                continue
+            state.pending_notifications.append(
+                PendingNotification(
+                    event_key=key,
+                    target=target,
+                    message=message,
+                    created_at=now,
+                    next_attempt_at=now,
+                    subscription=subscription,
+                )
             )
-        )
 
     def _require_state(self) -> PersistedState:
         if self._state is None:

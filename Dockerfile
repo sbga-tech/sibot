@@ -30,7 +30,7 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project
 
-COPY bot.py ./
+COPY bot.py defaults.env ./
 COPY sibot ./sibot
 
 ENV PATH="/app/.venv/bin:$PATH"

@@ -1,15 +1,16 @@
 """Persistent alert state stored as one atomically replaced JSON file."""
 
 import asyncio
+import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-_STATE_VERSION = 1
+_STATE_VERSION = 2
 
 
 class StateModel(BaseModel):
@@ -49,7 +50,8 @@ class PendingSubscription(StateModel):
 
 class PendingNotification(StateModel):
     event_key: str
-    group_id: int
+    # ChatTarget.key of the chat this copy of the alert goes to.
+    target: str
     message: str
     created_at: datetime
     attempts: int = 0
@@ -59,9 +61,18 @@ class PendingNotification(StateModel):
 
 
 class PersistedState(StateModel):
-    state_version: Literal[1] = _STATE_VERSION
+    state_version: Literal[2] = _STATE_VERSION
     credentials: dict[str, CredentialAlertState] = Field(default_factory=dict)
     pending_notifications: list[PendingNotification] = Field(default_factory=list)
+
+    @classmethod
+    def migrate(cls, data: Any) -> Any:
+        """Version 1 sent every alert to one QQ group."""
+        if isinstance(data, dict) and data.get("state_version") == 1:
+            for notification in data.get("pending_notifications", []):
+                notification["target"] = f"QQClient:{notification.pop('group_id')}"
+            data["state_version"] = _STATE_VERSION
+        return data
 
 
 class StateLoadError(RuntimeError):
@@ -96,8 +107,10 @@ class StateStore:
             raise StateLoadError from error
 
         try:
-            return PersistedState.model_validate_json(payload)
-        except (ValidationError, ValueError) as error:
+            return PersistedState.model_validate(
+                PersistedState.migrate(json.loads(payload))
+            )
+        except (ValidationError, ValueError, KeyError) as error:
             raise StateLoadError from error
 
     def _save_sync(self, payload: str) -> None:

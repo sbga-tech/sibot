@@ -2,19 +2,20 @@
 
 ## Project boundary
 
-- `sibot` is a NoneBot 2 plugin using the OneBot V11 adapter. It provides the `/ai` command surface and background notifications for the configured group.
+- `sibot` is a NoneBot 2 plugin for QQ (through a OneBot V11 client such as NapCat), Discord, and Telegram. It provides the `/ai` command surface in the chats listed in `MZK1_AI_TARGETS` and background notifications to the targets with alerts enabled. `bot.py` registers an adapter only when its connection setting (`ONEBOT_V11_WS_URLS`, `DISCORD_BOTS`, `TELEGRAM_BOTS`) is set.
 - CPA Portal is the only application API boundary for the Mzk1 AI plugin. Use its authenticated Admin API; do not give the bot Keeper passwords, CPA management keys, or direct access to either upstream service.
 - CPA and Keeper remain responsible for model routing, quota collection, quota history, and usage aggregation. The bot presents those results and must not implement a second quota database or a hidden rate limiter.
 
 ## Structure and conventions
 
 - `sibot/plugins/mzk1_ai/commands.py` parses `/ai` arguments and should remain free of network calls.
+- Messages are built and sent with nonebot-plugin-alconna's uniseg (`UniMessage`, `Target`), which converts them for each adapter. `chat.py` holds the few things that still differ per platform: chat and user keys (`scope:id`, scopes named as uniseg's `SupportScope`), how `/ai` is written, and reading back a sent alert. Keep platform branches there.
 - `portal.py` owns the async Portal client and its protocol/error mapping. `models.py` owns validated upstream models and small immutable domain values.
 - `quota.py` extracts each supported provider's (Codex, Claude) account windows from Keeper's quota cache. `forecast.py` computes per-provider shared-pool forecasts from reset-separated quota history; it must not predict individual-account exhaustion or simulate CPA's routing weights. Claude forecasts need Keeper's Claude quota history (cpa-usage-keeper PR #584); without it they report missing history.
-- `formatting.py` owns compact Chinese wording suitable for narrow QQ clients; keep user-facing wording there rather than in request or calculation code. `render.py` draws `/ai quota`, `/ai rank`, and `/ai reset` as PNG images (Pillow, Maple Mono Normal NL NF CN fetched and checksum-pinned in the `Dockerfile`) using that wording; `avatars.py` owns the bounded, file-cached avatar downloads for rankings. Alerts and help stay text because notification delivery is confirmed by comparing message text in group history.
+- `formatting.py` owns compact Chinese wording suitable for narrow QQ clients; keep user-facing wording there rather than in request or calculation code. `render.py` draws `/ai quota`, `/ai rank`, and `/ai reset` as PNG images (Pillow, Maple Mono Normal NL NF CN fetched and checksum-pinned in the `Dockerfile`) using that wording; `avatars.py` owns the bounded, file-cached avatar downloads for rankings. Alerts and help stay text because notification delivery is confirmed by comparing message text in chat history (Telegram cannot read history, so an unconfirmed Telegram alert is resent).
 - `monitor.py` owns periodic quota polling, persisted alert state, retry, and notification delivery. On-demand commands must not mutate monitor state or enqueue notifications.
 - Persistent plugin state belongs under `nonebot_plugin_localstore`; keep state writes atomic and do not store credentials or upstream secrets.
-- Target-group filtering, environment configuration, and OneBot sending behavior should follow the existing plugin helpers rather than introducing parallel abstractions.
+- Target-chat filtering, environment configuration, and message sending should follow the existing plugin helpers rather than introducing parallel abstractions.
 
 ## Rules
 

@@ -63,15 +63,16 @@ def format_missing_grant_accounts(count: int) -> str:
     return f"{count} 个账号暂无数据"
 
 
-def format_help() -> str:
+def format_help(command: str) -> str:
+    """`command` is how `/ai` is written on the chat platform."""
     return "\n".join(
         (
             "可用指令：",
-            "/ai rank [模型] [时间] [tokens|cost|req|cache]",
+            f"{command} rank [模型] [时间] [tokens|cost|req|cache]",
             "  时间：d 今天，w 本周，m 本月",
             "  d-1 昨天，m-1 上月，7d 近 7 天，2m 上月和本月",
-            "/ai quota",
-            "/ai reset",
+            f"{command} quota",
+            f"{command} reset",
         )
     )
 
@@ -92,34 +93,42 @@ def _format_dates(start: date, end: date) -> str:
     return f"{start:%m-%d}" if start == end else f"{start:%m-%d}~{end:%m-%d}"
 
 
-def format_rank_no_data(ranking: RankingResponse) -> str:
+def format_rank_no_data(ranking: RankingResponse, command: str) -> str:
     """Reply for a ranking with no entries: how the input was read, then help."""
     period = format_period(ranking.period, ranking.start_date, ranking.end_date)
     dates = _format_dates(ranking.start_date, ranking.end_date)
     if period != dates:
         period += f"（{dates}）"
     return _rank_problem(
-        "没有匹配的用量数据。", ranking.matcher, period, ranking.metric
+        "没有匹配的用量数据。", ranking.matcher, period, ranking.metric, command
     )
 
 
 def format_rank_rejected(
-    matcher: str | None, period: str, metric: RankingMetric
+    matcher: str | None, period: str, metric: RankingMetric, command: str
 ) -> str:
     """Reply for a ranking request Portal refused."""
     return _rank_problem(
-        "无法查询：时间需在最近 365 天内，模型名不超过 64 字。", matcher, period, metric
+        "无法查询：时间需在最近 365 天内，模型名不超过 64 字。",
+        matcher,
+        period,
+        metric,
+        command,
     )
 
 
 def _rank_problem(
-    problem: str, matcher: str | None, period: str, metric: RankingMetric
+    problem: str,
+    matcher: str | None,
+    period: str,
+    metric: RankingMetric,
+    command: str,
 ) -> str:
     return "\n".join(
         (
             problem,
             f"解析为：模型 {matcher or '全部'}，时间 {period}，指标 {metric}",
-            format_help(),
+            format_help(command),
         )
     )
 
