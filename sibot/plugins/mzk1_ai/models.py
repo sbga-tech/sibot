@@ -66,6 +66,79 @@ class RankingResponse(PortalModel):
     entries: list[RankingEntry]
 
 
+class PortalUser(PortalModel):
+    github_id: int
+    github_login: str
+
+
+class UsersResponse(PortalModel):
+    users: list[PortalUser]
+
+
+class UsageRanks(PortalModel):
+    tokens: int | None = None
+    cost: int | None = None
+    req: int | None = None
+    # Users with usage in the period.
+    users: int
+
+
+class UsageTotals(PortalModel):
+    requests: int
+    failed_requests: int
+    total_tokens: int
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+    cost_usd: float
+
+
+class UsageBucket(PortalModel):
+    # `YYYY-MM-DD` for days, an ISO timestamp for hours.
+    start: str
+    total_tokens: int
+    requests: int
+    cost_usd: float
+
+
+class UsageSeries(PortalModel):
+    unit: Literal["hour", "day"]
+    buckets: list[UsageBucket]
+
+
+class UsageModel(PortalModel):
+    model: str
+    total_tokens: int
+    requests: int
+    cost_usd: float
+
+
+class UsageKey(PortalModel):
+    label: str
+    suffix: str
+    revoked: bool
+    total_tokens: int
+    requests: int
+    cost_usd: float
+
+
+class UsageProfile(PortalModel):
+    """One user's usage over a period, through every key they were issued."""
+
+    period: RankingPeriod
+    start_date: date
+    end_date: date
+    generated_at: datetime
+    user: RankingUser
+    ranks: UsageRanks
+    totals: UsageTotals
+    series: UsageSeries
+    models: list[UsageModel]
+    keys: list[UsageKey]
+
+
 class QuotaCredential(PortalModel):
     credential_id: str
     display_name: str

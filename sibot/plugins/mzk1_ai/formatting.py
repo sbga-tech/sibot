@@ -15,6 +15,9 @@ from .models import (
     Provider,
     RankingMetric,
     RankingResponse,
+    UsageKey,
+    UsageRanks,
+    UsageTotals,
 )
 from .quota import is_login_invalid
 
@@ -71,10 +74,103 @@ def format_help(command: str) -> str:
             f"{command} rank [模型] [时间] [tokens|cost|req|cache]",
             "  时间：d 今天，w 本周，m 本月",
             "  d-1 昨天，m-1 上月，7d 近 7 天，2m 上月和本月",
+            f"{command} usage [@成员|GitHub 用户名] [时间]",
+            "  默认查自己近 7 天，需先绑定",
+            f"{command} link <GitHub 用户名>，{command} unlink",
             f"{command} quota",
             f"{command} reset",
         )
     )
+
+
+def format_linked(login: str) -> str:
+    return f"已绑定 GitHub 用户 {login}。"
+
+
+UNLINKED = "已解除绑定。"
+NOT_LINKED = "当前没有绑定。"
+MENTION_NOT_LINKED = "对方还没有绑定 GitHub 用户。"
+USAGE_REJECTED = "无法查询：时间需在最近 365 天内。"
+
+
+USAGE_TREND_TITLE = "Token 趋势"
+USAGE_KEYS_TITLE = "API Key"
+_RANK_LABELS = (("tokens", "Token"), ("cost", "Cost"), ("req", "请求"))
+
+
+def format_usage_title(login: str, period: str, start: date, end: date) -> str:
+    return f"{login} · {format_period(period, start, end)}"
+
+
+def format_usage_empty(login: str, period: str, start: date, end: date) -> str:
+    dates = _format_dates(start, end)
+    return f"{login} 在{format_period(period, start, end)}（{dates}）没有用量。"
+
+
+def format_usage_ranks(ranks: UsageRanks) -> str:
+    places = [
+        f"{label} 第 {place}"
+        for key, label in _RANK_LABELS
+        if (place := getattr(ranks, key)) is not None
+    ]
+    return f"{' · '.join(places)}（共 {ranks.users} 人）"
+
+
+def format_usage_stats(totals: UsageTotals, days: int) -> list[tuple[str, str]]:
+    """Label and value of each figure on the usage card, in reading order;
+    daily averages only for periods longer than a day."""
+    success = totals.requests - totals.failed_requests
+    cache_rate = (
+        totals.cache_read_tokens / totals.input_tokens if totals.input_tokens else 0.0
+    )
+    stats = [
+        ("请求", f"{totals.requests:,}"),
+        ("成功率", format_share(success / totals.requests) if totals.requests else "-"),
+        ("Token", format_tokens(totals.total_tokens)),
+        ("费用", format_cost(totals.cost_usd)),
+        ("输入", format_tokens(totals.input_tokens)),
+        ("输出", format_tokens(totals.output_tokens)),
+        ("推理", format_tokens(totals.reasoning_tokens)),
+        ("缓存命中", format_share(cache_rate)),
+    ]
+    if days > 1:
+        stats += [
+            ("日均请求", f"{totals.requests / days:,.1f}"),
+            ("日均 Token", format_tokens(totals.total_tokens / days)),
+            ("日均费用", format_cost(totals.cost_usd / days)),
+        ]
+    return stats
+
+
+def format_cost(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def format_key_label(key: UsageKey) -> str:
+    label = f"{key.label} ••••{key.suffix}"
+    return f"{label}（已吊销）" if key.revoked else label
+
+
+def format_key_usage(key: UsageKey) -> str:
+    return (
+        f"{format_tokens(key.total_tokens)} · {format_cost(key.cost_usd)}"
+        f" · {key.requests:,} 次"
+    )
+
+
+def format_bucket_label(start: str, unit: str) -> str:
+    """`MM-DD` for days, `HH` for hours."""
+    if unit == "hour":
+        return start[11:13]
+    return start[5:10]
+
+
+def format_self_not_linked(command: str) -> str:
+    return f"你还没有绑定 GitHub 用户，发送 {command} link <GitHub 用户名> 绑定。"
+
+
+def format_unknown_login(login: str) -> str:
+    return f"Portal 中没有 GitHub 用户 {login}。"
 
 
 def format_period(period: str, start: date, end: date) -> str:
@@ -294,7 +390,7 @@ def forecast_lines(forecast: PoolForecast) -> list[str]:
             remaining += f"（{forecast.unit_plan}=100%）"
         lines.append(remaining)
     if forecast.estimated_tokens is not None:
-        lines.append(f"约剩 {_format_tokens(forecast.estimated_tokens)} tokens")
+        lines.append(f"约剩 {format_tokens(forecast.estimated_tokens)} tokens")
     if forecast.next_reset_at is not None:
         lines.append(f"最早重置 {format_short_time(forecast.next_reset_at)}")
     if forecast.problem is not None:
@@ -322,7 +418,7 @@ def _format_scenario(scenario: ForecastScenario, forecast: PoolForecast) -> str:
     )
 
 
-def _format_tokens(value: float) -> str:
+def format_tokens(value: float) -> str:
     if value < _THOUSAND:
         return f"{value:.0f}"
     if value < _MILLION:

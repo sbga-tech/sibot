@@ -54,7 +54,7 @@ class QuotaMonitor:
     def __init__(
         self,
         portal: PortalClient,
-        store: StateStore,
+        store: StateStore[PersistedState],
         config: Config,
         send_notification: SendNotification,
         check_notification: CheckNotification,

@@ -1,4 +1,4 @@
-"""PNG cards for `/ai quota`, `/ai rank`, and `/ai reset`."""
+"""PNG cards for `/ai quota`, `/ai rank`, `/ai usage`, and `/ai reset`."""
 
 import io
 import zlib
@@ -20,9 +20,14 @@ from .formatting import (
     PROVIDER_LABELS,
     RANKING_TITLES,
     RESET_QUERY_FAILED,
+    USAGE_KEYS_TITLE,
+    USAGE_TREND_TITLE,
     USER_SHARE_TITLE,
     account_status,
     forecast_lines,
+    format_bucket_label,
+    format_key_label,
+    format_key_usage,
     format_missing_grant_accounts,
     format_other_users,
     format_percent,
@@ -30,6 +35,10 @@ from .formatting import (
     format_ranking_value,
     format_share,
     format_short_time,
+    format_tokens,
+    format_usage_ranks,
+    format_usage_stats,
+    format_usage_title,
     format_user_count,
     reset_credit_lines,
     reset_grant_details,
@@ -47,6 +56,7 @@ from .models import (
     RankingModel,
     RankingResponse,
     ResetOverview,
+    UsageProfile,
     WindowQuota,
 )
 
@@ -630,6 +640,11 @@ def _legend(entries: Sequence[RankingEntry]) -> _Legend:
     for entry in entries:
         for model in entry.models:
             totals[model.model] += model.value
+    return _model_legend(totals)
+
+
+def _model_legend(totals: Mapping[str, int]) -> _Legend:
+    """The largest models by value get their own colour; the rest merge."""
     grand = sum(totals.values())
     ranked = sorted(
         (model for model, value in totals.items() if value > 0),
@@ -971,3 +986,135 @@ def _avatar(
     rounded = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     rounded.paste(image, (0, 0), mask)
     return rounded
+
+
+# ---------------------------------------------------------------- usage
+
+_STAT_COLUMNS = 4
+_TREND_HEIGHT = 64 * _SCALE
+_TREND_BAR_GAP = 2 * _SCALE
+# Day labels under the trend chart; more days would crowd the axis.
+_TREND_LABELS = 8
+
+
+def render_usage(profile: UsageProfile, avatar: Image.Image | None) -> bytes:
+    """Draw a profile with usage; one without is answered as text."""
+    canvas = _Canvas(_RANK_WIDTH)
+    title = format_usage_title(
+        profile.user.github_login, profile.period, profile.start_date, profile.end_date
+    )
+    _header(canvas, title, format_short_time(profile.generated_at))
+    _usage_identity(canvas, profile, avatar)
+    canvas.y += _GAP
+    _usage_stats(canvas, profile)
+    canvas.y += _GAP
+    _usage_trend(canvas, profile)
+    canvas.y += _GAP
+    totals = {model.model: model.total_tokens for model in profile.models}
+    _model_share(canvas, _model_legend(totals))
+    canvas.y += _GAP
+    _usage_keys(canvas, profile)
+    return canvas.render()
+
+
+def _usage_identity(
+    canvas: _Canvas, profile: UsageProfile, avatar: Image.Image | None
+) -> None:
+    top = canvas.y
+    panel = canvas.open_panel()
+    canvas.y += _GAP
+    inner = _PAD + _GAP
+    right = canvas.width - inner
+    login = profile.user.github_login
+    row_top = canvas.y
+    canvas.paste(_avatar(avatar, login), inner, row_top)
+    text_x = inner + _AVATAR_SIZE + _GAP
+    canvas.y = row_top - 2 * _SCALE
+    canvas.text(text_x, _truncate(_Text(login, size=13, bold=True), right - text_x))
+    canvas.y = row_top + canvas.line_height(13) - 4 * _SCALE
+    ranks = _Text(format_usage_ranks(profile.ranks), size=10, color=_MUTED)
+    canvas.text(text_x, _truncate(ranks, right - text_x))
+    canvas.y = row_top + _AVATAR_SIZE + _GAP
+    canvas.close_panel(panel, top)
+
+
+def _usage_stats(canvas: _Canvas, profile: UsageProfile) -> None:
+    top = canvas.y
+    panel = canvas.open_panel()
+    canvas.y += _GAP
+    inner = _PAD + _GAP
+    right = canvas.width - inner
+    days = (profile.end_date - profile.start_date).days + 1
+    stats = format_usage_stats(profile.totals, days)
+    column_width = (right - inner - (_STAT_COLUMNS - 1) * _GAP) // _STAT_COLUMNS
+    row_height = canvas.line_height(10) + canvas.line_height(14)
+    for index, (label, value) in enumerate(stats):
+        x = inner + index % _STAT_COLUMNS * (column_width + _GAP)
+        row_top = top + _GAP + index // _STAT_COLUMNS * row_height
+        canvas.y = row_top
+        canvas.text(x, _muted(label))
+        canvas.y = row_top + canvas.line_height(10)
+        canvas.text(x, _truncate(_Text(value, size=14, bold=True), column_width))
+    rows = -(-len(stats) // _STAT_COLUMNS)
+    canvas.y = top + _GAP + rows * row_height + _GAP // 2
+    canvas.close_panel(panel, top)
+
+
+def _usage_trend(canvas: _Canvas, profile: UsageProfile) -> None:
+    top = canvas.y
+    panel = canvas.open_panel()
+    canvas.y += _GAP
+    inner = _PAD + _GAP
+    right = canvas.width - inner
+    buckets = profile.series.buckets
+    peak = max((bucket.total_tokens for bucket in buckets), default=0)
+    canvas.text(inner, _Text(USAGE_TREND_TITLE, size=12, bold=True))
+    canvas.text(right, _muted(f"峰值 {format_tokens(peak)}"), right=True)
+    canvas.y += canvas.line_height(12)
+
+    chart_top = canvas.y
+    slot = (right - inner) / max(len(buckets), 1)
+    bar_width = max(int(slot) - _TREND_BAR_GAP, _SCALE)
+    canvas.rect(
+        (inner, chart_top + _TREND_HEIGHT, right, chart_top + _TREND_HEIGHT + _SCALE),
+        _LINE,
+        0,
+    )
+    for index, bucket in enumerate(buckets):
+        if peak <= 0 or bucket.total_tokens <= 0:
+            continue
+        height = max(round(_TREND_HEIGHT * bucket.total_tokens / peak), _SCALE)
+        x = inner + round(index * slot)
+        bottom = chart_top + _TREND_HEIGHT
+        canvas.rect((x, bottom - height, x + bar_width, bottom), _ACCENT, _SCALE)
+
+    canvas.y = chart_top + _TREND_HEIGHT + 2 * _SCALE
+    step = max(1, -(-len(buckets) // _TREND_LABELS))
+    if profile.series.unit == "hour":
+        step = 6
+    for index in range(0, len(buckets), step):
+        label = _muted(format_bucket_label(buckets[index].start, profile.series.unit))
+        canvas.text(inner + round(index * slot), label)
+    canvas.y += canvas.line_height(10) + _GAP // 2
+    canvas.close_panel(panel, top)
+
+
+def _usage_keys(canvas: _Canvas, profile: UsageProfile) -> None:
+    top = canvas.y
+    panel = canvas.open_panel()
+    canvas.y += _GAP
+    inner = _PAD + _GAP
+    right = canvas.width - inner
+    canvas.text(inner, _Text(USAGE_KEYS_TITLE, size=12, bold=True))
+    canvas.y += canvas.line_height(12)
+    for key in profile.keys:
+        usage_width = canvas.text(
+            right, _Text(format_key_usage(key), size=11), right=True
+        )
+        label = _Text(
+            format_key_label(key), size=11, color=_MUTED if key.revoked else _FG
+        )
+        canvas.text(inner, _truncate(label, right - usage_width - _GAP - inner))
+        canvas.y += canvas.line_height(11)
+    canvas.y += _GAP // 2
+    canvas.close_panel(panel, top)

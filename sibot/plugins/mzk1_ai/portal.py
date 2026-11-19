@@ -17,6 +17,8 @@ from .models import (
     RankingPeriod,
     RankingResponse,
     ResetCreditsResponse,
+    UsageProfile,
+    UsersResponse,
 )
 
 _ResponseModel = TypeVar("_ResponseModel", bound=BaseModel)
@@ -38,6 +40,13 @@ class PortalBadRequestError(PortalError):
 
     def __init__(self) -> None:
         super().__init__("CPA Portal rejected the request parameters")
+
+
+class PortalNotFoundError(PortalError):
+    """The requested Portal user does not exist."""
+
+    def __init__(self) -> None:
+        super().__init__("CPA Portal has no such user")
 
 
 class PortalUpstreamError(PortalError):
@@ -108,6 +117,14 @@ class PortalClient:
             params["matcher"] = matcher
         return await self._get_model("ranking", RankingResponse, params=params)
 
+    async def users(self) -> UsersResponse:
+        return await self._get_model("users", UsersResponse)
+
+    async def usage(self, github_id: int, period: RankingPeriod) -> UsageProfile:
+        return await self._get_model(
+            f"users/{github_id}/usage", UsageProfile, params={"period": period}
+        )
+
     async def quota(self) -> QuotaSnapshot:
         return await self._get_model("quota", QuotaSnapshot)
 
@@ -156,6 +173,8 @@ class PortalClient:
             raise PortalUnauthorizedError
         if response.status_code == httpx.codes.BAD_REQUEST:
             raise PortalBadRequestError
+        if response.status_code == httpx.codes.NOT_FOUND:
+            raise PortalNotFoundError
         if response.status_code == httpx.codes.BAD_GATEWAY:
             raise PortalUpstreamError
         if not response.is_success:

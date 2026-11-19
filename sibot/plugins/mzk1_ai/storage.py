@@ -1,11 +1,11 @@
-"""Persistent alert state stored as one atomically replaced JSON file."""
+"""Persistent plugin state, each kind in one atomically replaced JSON file."""
 
 import asyncio
 import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -15,6 +15,11 @@ _STATE_VERSION = 2
 
 class StateModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    @classmethod
+    def migrate(cls, data: Any) -> Any:
+        """Upgrade the JSON of an older state version."""
+        return data
 
 
 class WeeklyAlertState(StateModel):
@@ -75,6 +80,22 @@ class PersistedState(StateModel):
         return data
 
 
+class ChatLink(StateModel):
+    github_id: int
+    # Telegram only: the username at link time, so `@username` mentions can be
+    # resolved; Telegram reports mentions by username, not by user ID.
+    username: str | None = None
+
+
+class LinkState(StateModel):
+    """Chat accounts linked to Portal users, keyed by `scope:user_id`."""
+
+    links: dict[str, ChatLink] = Field(default_factory=dict)
+
+
+_State = TypeVar("_State", bound=StateModel)
+
+
 class StateLoadError(RuntimeError):
     """The persisted state file is unreadable or invalid."""
 
@@ -82,34 +103,33 @@ class StateLoadError(RuntimeError):
         super().__init__("Mzk1 AI state file is unreadable or invalid")
 
 
-class StateStore:
+class StateStore(Generic[_State]):
     """Serialize access and atomically replace the state file."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, model: type[_State]) -> None:
         self._path = path
+        self._model = model
         self._lock = asyncio.Lock()
 
-    async def load(self) -> PersistedState:
+    async def load(self) -> _State:
         async with self._lock:
             return await asyncio.to_thread(self._load_sync)
 
-    async def save(self, state: PersistedState) -> None:
+    async def save(self, state: _State) -> None:
         async with self._lock:
             payload = f"{state.model_dump_json(indent=2)}\n"
             await asyncio.to_thread(self._save_sync, payload)
 
-    def _load_sync(self) -> PersistedState:
+    def _load_sync(self) -> _State:
         try:
             payload = self._path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return PersistedState()
+            return self._model()
         except OSError as error:
             raise StateLoadError from error
 
         try:
-            return PersistedState.model_validate(
-                PersistedState.migrate(json.loads(payload))
-            )
+            return self._model.model_validate(self._model.migrate(json.loads(payload)))
         except (ValidationError, ValueError, KeyError) as error:
             raise StateLoadError from error
 

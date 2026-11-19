@@ -9,6 +9,7 @@ from nonebot.adapters.discord import Bot as DiscordBot
 from nonebot.adapters.onebot.v11 import Message as OneBotMessage
 from nonebot.adapters.onebot.v11 import MessageSegment as OneBotSegment
 from nonebot.adapters.telegram import Bot as TelegramBot
+from nonebot.adapters.telegram.event import GroupMessageEvent as TelegramGroupEvent
 from nonebot.compat import type_validate_python
 from nonebot_plugin_alconna.uniseg import Target, get_target
 
@@ -35,6 +36,14 @@ def scope_of(bot: Bot) -> ChatScope | None:
     return _SCOPES.get(bot.adapter.get_name())
 
 
+def require_scope(bot: Bot) -> ChatScope:
+    """The platform of a bot that passed the `/ai` rule."""
+    scope = scope_of(bot)
+    if scope is None:
+        raise TypeError(bot.adapter.get_name())
+    return scope
+
+
 def chat_key(bot: Bot, event: Event) -> str | None:
     """`scope:chat_id` of a group chat or channel message, else None."""
     scope = scope_of(bot)
@@ -49,6 +58,10 @@ def chat_key(bot: Bot, event: Event) -> str | None:
     return f"{scope}:{target.id}"
 
 
+def user_key(scope: ChatScope, user_id: str) -> str:
+    return f"{scope}:{user_id}"
+
+
 def command_label(bot: Bot) -> str:
     """How users write `/ai` on this platform, for help text."""
     if isinstance(bot, DiscordBot):
@@ -56,6 +69,13 @@ def command_label(bot: Bot) -> str:
     if isinstance(bot, TelegramBot):
         return f"/ai@{bot.username}"
     return "/ai"
+
+
+def telegram_username(event: Event) -> str | None:
+    """The sender's Telegram username, lowercase, if any."""
+    if isinstance(event, TelegramGroupEvent) and event.from_.username:
+        return event.from_.username.lower()
+    return None
 
 
 def alert_target(target: ChatTarget) -> Target:
