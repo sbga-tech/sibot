@@ -136,14 +136,15 @@ class PortalClient:
         return await self._get_model("quota/routing", QuotaRoutingSnapshot)
 
     async def quota_history(
-        self, auth_index: str, window_role: str
+        self, auth_index: str, window_role: str | None = None
     ) -> QuotaHistoryResponse:
+        """`window_role` None lets Keeper pick the window with a current cycle."""
         if not auth_index.strip() or auth_index in {".", ".."}:
             raise PortalBadRequestError
         return await self._get_model(
             f"quota/history/{quote(auth_index, safe='')}",
             QuotaHistoryResponse,
-            params={"window_role": window_role},
+            params=None if window_role is None else {"window_role": window_role},
         )
 
     async def reset_credits(self, auth_index: str) -> ResetCreditsResponse:

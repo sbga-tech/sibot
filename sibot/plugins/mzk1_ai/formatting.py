@@ -57,13 +57,38 @@ _FORECAST_PROBLEMS = {
 }
 # Quota windows a Claude reset grant clears, in display order.
 _GRANT_CLEARS = {"five_hour": "5h", "seven_day": "周"}
-RESET_QUERY_FAILED = "查询失败"
+QUERY_FAILED = "查询失败"
+QUERY_FAILED_REPLY = "查询失败，请稍后再试。"
+NO_QUOTA_ACCOUNTS = "暂无可用账号"
 NO_RESET_DATA = "暂无数据"
 NO_RESET_GRANTS = "暂无重置机会"
 
 
 def format_missing_grant_accounts(count: int) -> str:
     return f"{count} 个账号暂无数据"
+
+
+QUOTA_HISTORY_NOTE = "曲线为各账号周额度剩余，竖线为每天 0 点，空白为无数据"
+
+
+def format_history_title(days: int) -> str:
+    return f"额度历史 · 近 {days} 天"
+
+
+def format_history_total(days: int, points: float) -> str:
+    return f"{days} 天共用 {format_percent(points)}"
+
+
+def format_daily_usage_title(unit_plan: str) -> str:
+    return f"每日消耗（{unit_plan}=100%）"
+
+
+def format_history_day(day: date, *, today: bool) -> str:
+    return "今天" if today else f"{day:%m-%d}"
+
+
+def format_history_used(percent: float) -> str:
+    return f"用 {format_percent(percent)}"
 
 
 def format_help(command: str) -> str:
@@ -77,7 +102,8 @@ def format_help(command: str) -> str:
             f"{command} usage [@成员|GitHub 用户名] [时间]",
             "  默认查自己近 7 天，需先绑定",
             f"{command} link <GitHub 用户名>，{command} unlink",
-            f"{command} quota",
+            f"{command} quota [7d|30d]",
+            "  7d/30d：近 7/30 天额度历史",
             f"{command} reset",
         )
     )
@@ -269,7 +295,7 @@ def reset_credit_lines(account: CodexAccountResetCredits) -> tuple[str, list[str
     """Headline status and expiry detail lines for one account's reset credits."""
     response = account.response
     if response is None:
-        return RESET_QUERY_FAILED, []
+        return QUERY_FAILED, []
 
     count = response.available_count
     status = "可用次数未知" if count is None else f"可用 {count} 次"

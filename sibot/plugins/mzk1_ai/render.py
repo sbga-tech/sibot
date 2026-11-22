@@ -1,11 +1,11 @@
-"""PNG cards for `/ai quota`, `/ai rank`, `/ai usage`, and `/ai reset`."""
+"""PNG cards for the `/ai` replies drawn as images."""
 
 import io
 import zlib
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
 from typing import TypeAlias
@@ -14,18 +14,25 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .formatting import (
     MODEL_SHARE_TITLE,
+    NO_QUOTA_ACCOUNTS,
     NO_RESET_DATA,
     NO_RESET_GRANTS,
     OTHER_MODELS_LABEL,
     PROVIDER_LABELS,
+    QUERY_FAILED,
+    QUOTA_HISTORY_NOTE,
     RANKING_TITLES,
-    RESET_QUERY_FAILED,
     USAGE_KEYS_TITLE,
     USAGE_TREND_TITLE,
     USER_SHARE_TITLE,
     account_status,
     forecast_lines,
     format_bucket_label,
+    format_daily_usage_title,
+    format_history_day,
+    format_history_title,
+    format_history_total,
+    format_history_used,
     format_key_label,
     format_key_usage,
     format_missing_grant_accounts,
@@ -46,15 +53,19 @@ from .formatting import (
 )
 from .models import (
     PROVIDERS,
+    AccountHistory,
     AccountQuota,
     ClaudeResetGrant,
     CodexAccountResetCredits,
     PoolForecast,
     Provider,
+    ProviderHistory,
+    QuotaHistoryOverview,
     RankingEntry,
     RankingMetric,
     RankingModel,
     RankingResponse,
+    RemainingSpan,
     ResetOverview,
     UsageProfile,
     WindowQuota,
@@ -215,7 +226,7 @@ def render_quota(
                 canvas, provider, group, forecasts.get(provider), window_activity
             )
     if not accounts:
-        canvas.text(_PAD, _Text("暂无可用账号", color=_MUTED))
+        canvas.text(_PAD, _Text(NO_QUOTA_ACCOUNTS, color=_MUTED))
         canvas.y += canvas.line_height(13)
     return canvas.render()
 
@@ -367,7 +378,7 @@ def render_reset_credits(overview: ResetOverview, generated_at: datetime) -> byt
     if overview.claude != ():
         _claude_reset_section(canvas, overview.claude, generated_at)
     if overview.codex == () and overview.claude == ():
-        canvas.text(_PAD, _Text("暂无可用账号", color=_MUTED))
+        canvas.text(_PAD, _Text(NO_QUOTA_ACCOUNTS, color=_MUTED))
         canvas.y += canvas.line_height(13)
     return canvas.render()
 
@@ -396,7 +407,7 @@ def _codex_reset_section(
     inner = _PAD + _GAP
     right = _WIDTH - _PAD - _GAP
     if accounts is None:
-        canvas.text(inner, _Text(RESET_QUERY_FAILED, size=12, color=_RED))
+        canvas.text(inner, _Text(QUERY_FAILED, size=12, color=_RED))
         canvas.y += canvas.line_height(12)
     for account in accounts or ():
         _reset_separator(canvas)
@@ -455,7 +466,7 @@ def _claude_reset_notice(
     accounts: Sequence[AccountQuota] | None, *, has_grants: bool
 ) -> _Text | None:
     if accounts is None:
-        return _Text(RESET_QUERY_FAILED, size=12, color=_RED)
+        return _Text(QUERY_FAILED, size=12, color=_RED)
     if has_grants:
         return None
     if all(account.claude_reset_grants is None for account in accounts):
@@ -1118,3 +1129,227 @@ def _usage_keys(canvas: _Canvas, profile: UsageProfile) -> None:
         canvas.y += canvas.line_height(11)
     canvas.y += _GAP // 2
     canvas.close_panel(panel, top)
+
+
+# ---------------------------------------------------------------- quota history
+
+_HISTORY_CHART_HEIGHT = 56 * _SCALE
+_SPARK_HEIGHT = 26 * _SCALE
+_SPARK_FILL = (*_ACCENT, 40)
+# Every day gets a column wide enough for its value and date labels; the card
+# grows past the usual width when the days need it.
+_HISTORY_DAY_LABEL_SAMPLES = ("00000%", "00-00")
+_HISTORY_BAR_FRACTION = 0.6
+
+
+def render_quota_history(overview: QuotaHistoryOverview) -> bytes:
+    day_width = (
+        max(_Canvas.measure(_muted(sample)) for sample in _HISTORY_DAY_LABEL_SAMPLES)
+        + _GAP // 2
+    )
+    canvas = _Canvas(max(_RANK_WIDTH, overview.days * day_width + 2 * (_PAD + _GAP)))
+    _header(
+        canvas,
+        format_history_title(overview.days),
+        format_short_time(overview.generated_at),
+    )
+    accounts = [
+        account for provider in overview.providers for account in provider.accounts
+    ]
+    if not accounts:
+        canvas.text(_PAD, _Text(NO_QUOTA_ACCOUNTS, color=_MUTED))
+        canvas.y += canvas.line_height(13)
+        return canvas.render()
+    columns = _history_columns(canvas, accounts)
+    for provider in overview.providers:
+        _history_section(canvas, overview, provider, columns)
+    canvas.text(_PAD, _muted(QUOTA_HISTORY_NOTE))
+    canvas.y += canvas.line_height(10)
+    return canvas.render()
+
+
+@dataclass(frozen=True, slots=True)
+class _HistoryColumns:
+    """Name and plan columns shared by every account row on the card."""
+
+    name_width: int
+    plan_x: int
+
+
+def _history_columns(
+    canvas: _Canvas, accounts: Sequence[AccountHistory]
+) -> _HistoryColumns:
+    inner = _PAD + _GAP
+    plan_width = max(
+        (canvas.measure(_muted(account.plan)) for account in accounts if account.plan),
+        default=0,
+    )
+    used_width = max(canvas.measure(_history_used(account)) for account in accounts)
+    longest = max(
+        canvas.measure(_Text(account.display_name, size=13)) for account in accounts
+    )
+    name_width = min(
+        longest, canvas.width - 2 * inner - plan_width - used_width - 2 * _GAP
+    )
+    return _HistoryColumns(name_width, inner + name_width + _GAP)
+
+
+def _history_used(account: AccountHistory) -> _Text:
+    if account.spans is None:
+        return _Text("", size=11)
+    return _Text(
+        format_history_used(account.used_percent),
+        size=11,
+        color=_MUTED if account.exhausted else _GREEN,
+    )
+
+
+def _history_section(
+    canvas: _Canvas,
+    overview: QuotaHistoryOverview,
+    provider: ProviderHistory,
+    columns: _HistoryColumns,
+) -> None:
+    top = canvas.y
+    panel = canvas.open_panel()
+    canvas.y += _GAP
+    inner = _PAD + _GAP
+    right = canvas.width - inner
+    canvas.text(
+        inner,
+        _Text(PROVIDER_LABELS[provider.provider], size=15, bold=True, color=_ACCENT),
+    )
+    total = format_history_total(overview.days, sum(provider.daily_points))
+    canvas.text(right, _muted(total), right=True)
+    canvas.y += canvas.line_height(15)
+    canvas.text(
+        inner, _Text(format_daily_usage_title(provider.unit_plan), size=12, bold=True)
+    )
+    canvas.y += canvas.line_height(12) + _GAP // 2
+    _daily_usage_chart(canvas, overview, provider.daily_points)
+    for account in provider.accounts:
+        canvas.rect((inner, canvas.y, right, canvas.y + 1), _LINE, 0)
+        canvas.y += _GAP // 2 + 2 * _SCALE
+        _history_row(canvas, overview, account, columns)
+    canvas.y += _GAP // 2
+    canvas.close_panel(panel, top)
+    canvas.y += _GAP
+
+
+def _daily_usage_chart(
+    canvas: _Canvas, overview: QuotaHistoryOverview, points: Sequence[float]
+) -> None:
+    inner = _PAD + _GAP
+    right = canvas.width - inner
+    label_height = canvas.line_height(10)
+    bottom = canvas.y + label_height + _HISTORY_CHART_HEIGHT
+    peak = max(points, default=0.0)
+    slot = (right - inner) / len(points)
+    bar_width = max(int(slot * _HISTORY_BAR_FRACTION), _SCALE)
+    canvas.rect((inner, bottom, right, bottom + _SCALE), _LINE, 0)
+    for index, value in enumerate(points):
+        center = inner + round(index * slot + slot / 2)
+        height = (
+            max(round(_HISTORY_CHART_HEIGHT * value / peak), _SCALE)
+            if value > 0 and peak > 0
+            else 0
+        )
+        if height:
+            canvas.rect(
+                (
+                    center - bar_width // 2,
+                    bottom - height,
+                    center + bar_width // 2,
+                    bottom,
+                ),
+                _ACCENT,
+                _SCALE,
+            )
+        canvas.y = bottom - height - label_height
+        _centered(canvas, center, _muted(format_percent(value)))
+        canvas.y = bottom + 2 * _SCALE
+        day = overview.start + timedelta(days=index)
+        label = format_history_day(day, today=index == len(points) - 1)
+        _centered(canvas, center, _muted(label))
+    canvas.y = bottom + 2 * _SCALE + canvas.line_height(10) + _GAP
+
+
+def _centered(canvas: _Canvas, center: int, item: _Text) -> None:
+    canvas.text(center - canvas.measure(item) // 2, item)
+
+
+def _history_row(
+    canvas: _Canvas,
+    overview: QuotaHistoryOverview,
+    account: AccountHistory,
+    columns: _HistoryColumns,
+) -> None:
+    inner = _PAD + _GAP
+    right = canvas.width - inner
+    row_top = canvas.y
+    name = _truncate(_Text(account.display_name, size=13), columns.name_width)
+    canvas.text(inner, name)
+    used = _history_used(account)
+    canvas.y = _baseline(row_top, name, used)
+    canvas.text(right, used, right=True)
+    if account.plan:
+        plan = _muted(account.plan)
+        canvas.y = _baseline(row_top, name, plan)
+        canvas.text(columns.plan_x, plan)
+    canvas.y = row_top + canvas.line_height(13)
+    if account.spans is None:
+        failed = _Text(QUERY_FAILED, size=12, color=_RED)
+        canvas.y += (_SPARK_HEIGHT - canvas.line_height(12)) // 2
+        canvas.text(inner, failed)
+        canvas.y = row_top + canvas.line_height(13)
+    else:
+        canvas.paste(
+            _sparkline(overview, account.spans, right - inner), inner, canvas.y
+        )
+    canvas.y += _SPARK_HEIGHT + _GAP // 2
+
+
+def _baseline(row_top: int, reference: _Text, item: _Text) -> int:
+    """Top for `item` so it shares a baseline with `reference` drawn at `row_top`."""
+    return row_top + reference.font.getmetrics()[0] - item.font.getmetrics()[0]
+
+
+def _sparkline(
+    overview: QuotaHistoryOverview, spans: Sequence[RemainingSpan], width: int
+) -> Image.Image:
+    """Remaining percent over whole days; 0% is red and unobserved time blank."""
+    image = Image.new("RGBA", (width, _SPARK_HEIGHT), (*_BG, 255))
+    draw = ImageDraw.Draw(image, "RGBA")
+    seconds = overview.days * 86400
+
+    def x_of(moment: datetime) -> int:
+        offset = (moment - overview.start).total_seconds()
+        return round(max(0.0, min(offset, seconds)) / seconds * (width - 1))
+
+    def y_of(remaining: int) -> int:
+        return round((1 - remaining / 100) * (_SPARK_HEIGHT - 2 * _SCALE)) + _SCALE
+
+    for index in range(1, overview.days):
+        x = round(index / overview.days * (width - 1))
+        draw.line((x, 0, x, _SPARK_HEIGHT), fill=_LINE, width=1)
+    for span in spans:
+        left = x_of(span.start)
+        draw.rectangle(
+            (
+                left,
+                y_of(span.remaining_percent),
+                max(x_of(span.end), left + 1),
+                _SPARK_HEIGHT - 1,
+            ),
+            fill=_SPARK_FILL,
+        )
+    previous: tuple[datetime, int, int] | None = None
+    for span in spans:
+        left, y = x_of(span.start), y_of(span.remaining_percent)
+        # Join steps within an observed stretch, not across a data gap.
+        if previous is not None and previous[0] == span.start:
+            draw.line((left, previous[2], left, y), fill=_ACCENT, width=_SCALE)
+        color = _RED if span.remaining_percent == 0 else _ACCENT
+        draw.line((left, y, max(x_of(span.end), left + 1), y), fill=color, width=_SCALE)
+        previous = (span.end, left, y)
+    return image

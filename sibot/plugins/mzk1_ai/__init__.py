@@ -32,6 +32,7 @@ from .forecast import load_forecasts
 from .formatting import (
     MENTION_NOT_LINKED,
     NOT_LINKED,
+    QUERY_FAILED_REPLY,
     UNLINKED,
     USAGE_REJECTED,
     format_help,
@@ -42,10 +43,18 @@ from .formatting import (
     format_unknown_login,
     format_usage_empty,
 )
+from .history import load_quota_history
+from .models import QuotaHistoryDays
 from .monitor import QuotaMonitor
 from .portal import PortalBadRequestError, PortalClient, PortalError
 from .quota import extract_accounts
-from .render import render_quota, render_ranking, render_reset_credits, render_usage
+from .render import (
+    render_quota,
+    render_quota_history,
+    render_ranking,
+    render_reset_credits,
+    render_usage,
+)
 from .reset import load_reset_overview
 from .storage import (
     ChatLink,
@@ -57,11 +66,13 @@ from .storage import (
 
 __plugin_meta__ = PluginMetadata(
     name="Mzk1 AI",
-    description="CPA 用量排名与个人用量、Codex/Claude 额度提醒、续航和重置机会查询。",
+    description=(
+        "CPA 用量排名与个人用量、Codex/Claude 额度提醒、续航、额度历史和重置机会查询。"
+    ),
     usage=(
         "/ai rank [模型] [时间] [tokens|cost|req|cache], "
         "/ai usage [@成员|GitHub 用户名] [时间], /ai link <GitHub 用户名>, "
-        "/ai unlink, /ai quota, /ai reset"
+        "/ai unlink, /ai quota [7d|30d], /ai reset"
     ),
     type="application",
     config=Config,
@@ -150,7 +161,7 @@ async def _execute_command(
         logger.error("Mzk1 AI command failed: {}", type(error).__name__)
     except Exception:  # noqa: BLE001
         logger.exception("Mzk1 AI command failed unexpectedly")
-    return UniMessage.text("查询失败，请稍后再试。")
+    return UniMessage.text(QUERY_FAILED_REPLY)
 
 
 async def _load_command_reply(
@@ -163,7 +174,7 @@ async def _load_command_reply(
     if command.action == "rank":
         return await _rank_reply(command, label)
     if command.action == "quota":
-        return await _quota_reply()
+        return await _quota_reply(command.history_days)
     if command.action == "reset":
         overview = await load_reset_overview(portal_client)
         return UniMessage.image(
@@ -174,7 +185,9 @@ async def _load_command_reply(
     return UniMessage.text(format_help(label))
 
 
-async def _quota_reply() -> UniMessage:
+async def _quota_reply(history_days: QuotaHistoryDays | None) -> UniMessage:
+    if history_days is not None:
+        return await _quota_history_reply(history_days)
     snapshot = await portal_client.quota()
     accounts = extract_accounts(snapshot)
     activity = quota_monitor.weekly_window_activity()
@@ -184,6 +197,16 @@ async def _quota_reply() -> UniMessage:
             render_quota, accounts, forecasts, activity, datetime.now(timezone.utc)
         )
     )
+
+
+async def _quota_history_reply(days: QuotaHistoryDays) -> UniMessage:
+    overview = await load_quota_history(portal_client, days)
+    accounts = [
+        account for provider in overview.providers for account in provider.accounts
+    ]
+    if accounts and all(account.spans is None for account in accounts):
+        return UniMessage.text(QUERY_FAILED_REPLY)
+    return UniMessage.image(raw=await asyncio.to_thread(render_quota_history, overview))
 
 
 async def _rank_reply(command: AICommand, label: str) -> UniMessage:

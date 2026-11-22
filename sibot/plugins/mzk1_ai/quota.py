@@ -22,6 +22,22 @@ FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60
 _MAX_PERCENT = 100
 _HTTP_UNAUTHORIZED = 401
 
+# Weekly capacity of each plan in units of the provider's base plan; one base
+# plan's full weekly quota is 100 pool points.
+UNIT_PLANS: dict[Provider, str] = {"codex": "plus", "claude": "pro"}
+PLAN_CAPACITIES: dict[Provider, dict[str, int]] = {
+    "codex": {"plus": 1, "pro-5x": 5, "pro-20x": 20},
+    "claude": {
+        "pro": 1,
+        "max-5x": 5,
+        "max-20x": 20,
+        # Keeper falls back to plain "max" when Anthropic's profile has no
+        # recognizable rate_limit_tier; count it as the tier our Max accounts
+        # use rather than dropping the whole pool.
+        "max": 20,
+    },
+}
+
 # Keeper row keys for each provider's account-wide windows. Codex reports its
 # windows by role, so the weekly one is identified by length.
 _CODEX_MAIN_KEYS = {

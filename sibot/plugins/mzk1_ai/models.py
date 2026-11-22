@@ -26,6 +26,8 @@ PROVIDERS: tuple[Provider, ...] = ("codex", "claude")
 AccountStatus: TypeAlias = Literal[
     "completed", "failed", "missing", "invalid", "unstarted"
 ]
+# Days covered by `/ai quota 7d|30d`, counted in whole local days up to today.
+QuotaHistoryDays: TypeAlias = Literal[7, 30]
 
 
 class PortalModel(BaseModel):
@@ -390,13 +392,57 @@ class QuotaHistoryCycle(PortalModel):
     reset_at: AwareDatetime
     first_observed_at: AwareDatetime
     last_observed_at: AwareDatetime
+    # Only needed for a cycle whose percentage never changed.
+    first_remaining_percent: int | None = Field(default=None, ge=0, le=100)
     transitions: list[QuotaHistoryTransition]
 
 
 class QuotaHistoryResponse(PortalModel):
     generated_at: AwareDatetime
+    # Every window role with history; lets a caller find the weekly one.
+    windows: list[QuotaHistoryWindow] = Field(default_factory=list)
     selected_window: QuotaHistoryWindow | None
     cycles: list[QuotaHistoryCycle]
+
+
+@dataclass(frozen=True, slots=True)
+class RemainingSpan:
+    """A stretch of time over which an account's weekly remaining percent held."""
+
+    start: datetime
+    end: datetime
+    remaining_percent: int
+
+
+@dataclass(frozen=True, slots=True)
+class AccountHistory:
+    display_name: str
+    plan: str | None
+    # None when the account's history query failed.
+    spans: tuple[RemainingSpan, ...] | None
+    # Remaining-percent points dropped within the period, across cycles.
+    used_percent: float
+    # The weekly quota sat at 0% at some point within the period.
+    exhausted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderHistory:
+    provider: Provider
+    unit_plan: str
+    # Pool points used per local day, oldest first; accounts with an unknown
+    # plan are left out because their capacity cannot be converted.
+    daily_points: tuple[float, ...]
+    accounts: tuple[AccountHistory, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class QuotaHistoryOverview:
+    days: QuotaHistoryDays
+    # Local midnight starting the first day.
+    start: datetime
+    generated_at: datetime
+    providers: tuple[ProviderHistory, ...]
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from .models import RankingMetric, RankingPeriod
+from .models import QuotaHistoryDays, RankingMetric, RankingPeriod
 
 # Shape of Portal's period syntax; Portal checks the range itself.
 _PERIOD = re.compile(r"[dwm](?:-\d{1,4})?|\d{1,4}[dwm]", re.IGNORECASE)
@@ -23,6 +23,8 @@ _BARE_ACTIONS: dict[str, Literal["quota", "reset", "unlink"]] = {
     "reset": "reset",
     "unlink": "unlink",
 }
+# `/ai quota <period>` shows weekly-quota history over a fixed number of days.
+_QUOTA_HISTORY_PERIODS: dict[str, QuotaHistoryDays] = {"7d": 7, "30d": 30}
 
 
 class CommandUsageError(ValueError):
@@ -37,6 +39,8 @@ class AICommand:
     matcher: str | None = None
     # GitHub login: whose usage to show, or whom to link to.
     login: str | None = None
+    # Days of quota history; None shows the current quota.
+    history_days: QuotaHistoryDays | None = None
 
 
 def parse_ai_command(argument: str) -> AICommand:
@@ -51,6 +55,10 @@ def parse_ai_command(argument: str) -> AICommand:
         return AICommand(action=bare)
     if action == "link" and len(tokens[1:]) == 1:
         return AICommand(action="link", login=tokens[1])
+    if action == "quota" and len(tokens[1:]) == 1:
+        days = _QUOTA_HISTORY_PERIODS.get(tokens[1].lower())
+        if days is not None:
+            return AICommand(action="quota", history_days=days)
     if action == "usage":
         return _parse_usage(tokens[1:])
     if action == "rank":

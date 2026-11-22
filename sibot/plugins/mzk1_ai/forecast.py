@@ -22,7 +22,12 @@ from .models import (
     QuotaRoutingSnapshot,
 )
 from .portal import PortalClient, PortalError
-from .quota import WEEKLY_WINDOW_SECONDS, is_login_invalid
+from .quota import (
+    PLAN_CAPACITIES,
+    UNIT_PLANS,
+    WEEKLY_WINDOW_SECONDS,
+    is_login_invalid,
+)
 
 _HISTORY_QUERY_CONCURRENCY = 4
 # Short history reacts to the current usage speed; longer history stabilizes
@@ -34,21 +39,6 @@ _CYCLE_TIME_TOLERANCE = timedelta(minutes=2)
 # to 30 s of jitter); an account whose cooldown ends then still refills.
 _ROUTING_RESET_TOLERANCE = timedelta(minutes=2)
 _FULL_PERCENT = 100.0
-# Weekly capacity of each plan in units of the provider's base plan; one base
-# plan's full weekly quota is 100 pool points.
-_UNIT_PLANS: dict[Provider, str] = {"codex": "plus", "claude": "pro"}
-_PLAN_CAPACITIES: dict[Provider, dict[str, int]] = {
-    "codex": {"plus": 1, "pro-5x": 5, "pro-20x": 20},
-    "claude": {
-        "pro": 1,
-        "max-5x": 5,
-        "max-20x": 20,
-        # Keeper falls back to plain "max" when Anthropic's profile has no
-        # recognizable rate_limit_tier; count it as the tier our Max accounts
-        # use rather than dropping the whole pool.
-        "max": 20,
-    },
-}
 
 
 async def load_forecasts(
@@ -213,10 +203,10 @@ def _capacities(
     provider: Provider, accounts: Sequence[AccountQuota]
 ) -> tuple[str, dict[str, int]] | None:
     """Return the unit plan and each account's weekly capacity in unit plans."""
-    capacities = _PLAN_CAPACITIES[provider]
+    capacities = PLAN_CAPACITIES[provider]
     if any(account.plan not in capacities for account in accounts):
         return None
-    return _UNIT_PLANS[provider], {
+    return UNIT_PLANS[provider], {
         account.credential_id: capacities[account.plan or ""] for account in accounts
     }
 
